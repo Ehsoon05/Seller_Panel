@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -361,7 +362,7 @@ async def create_service(
             await _refund(session, seller.id, offer.price_toman, f"بازگشت وجه ثبت ناموفق {username}")
         raise
     await session.refresh(seller)
-    await notify_service_created(seller, offer, service)
+    asyncio.create_task(notify_service_created(seller, offer, service))
     return service
 
 
