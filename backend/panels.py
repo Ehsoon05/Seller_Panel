@@ -149,7 +149,9 @@ async def _access_fields(
         limit = hwid_limit if hwid_limit is not None else panel.hwid_limit
         if limit is not None and limit > 0:
             fields["hwid_limit"] = limit
-        if panel.panel_type == "easy":
+        # A Pasarguard group already defines its eligible inbounds. Do not
+        # combine it with an old per-inbound filter from the inventory panel.
+        if panel.panel_type == "easy" or fields.get("group_ids"):
             return fields
     if panel.inbounds:
         return {
