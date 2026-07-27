@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,8 +14,20 @@ class Settings(BaseSettings):
     svn_panel_api_url: str = ""
     jwt_secret: str
     admin_jwt_secret: str
-    subscription_sync_url: str = ""
-    subscription_sync_token: str = ""
+    subscription_sync_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SUBSCRIPTION_SYNC_URL",
+            "SUBSCRIPTION_PANEL_SYNC_URL",
+        ),
+    )
+    subscription_sync_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SUBSCRIPTION_SYNC_TOKEN",
+            "SUBSCRIPTION_PANEL_SYNC_TOKEN",
+        ),
+    )
     subscription_public_base_url: str = "https://api.phantomhubs.shop"
     cors_origins: str = "https://sellers.phantomhubs.shop,https://admin.phantomhubs.shop"
     cookie_secure: bool = True
