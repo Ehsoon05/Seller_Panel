@@ -20,14 +20,31 @@ async def initialize_database() -> None:
         await connection.run_sync(Base.metadata.create_all)
 
         def migrate(sync_connection) -> None:
-            columns = {
+            seller_columns = {
                 column["name"] for column in inspect(sync_connection).get_columns("sellers")
             }
-            if "allow_negative_balance" not in columns:
+            if "allow_negative_balance" not in seller_columns:
                 sync_connection.execute(
                     text(
                         "ALTER TABLE sellers ADD COLUMN "
                         "allow_negative_balance BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            offer_columns = {
+                column["name"] for column in inspect(sync_connection).get_columns("seller_offers")
+            }
+            if "lock_volume" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "lock_volume BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            if "lock_time" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "lock_time BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
 

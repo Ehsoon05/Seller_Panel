@@ -262,6 +262,73 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             await session.refresh(seller)
             self.assertEqual(seller.wallet_balance, -100_000)
 
+    async def test_locked_offer_uses_its_fixed_time_values(self) -> None:
+        payload = {
+            "username": "FixedTimeUser",
+            "status": "active",
+            "used_traffic": 0,
+            "data_limit": 20 * 1024**3,
+            "expire": 1_900_000_000,
+            "_subscription_url": "https://panel.example/sub/fixed-time",
+        }
+        body = CreateServiceBody(
+            request_id="fixed-time-00000000000000001",
+            offer_id=self.offer_id,
+            panel_username="FixedTimeUser",
+            duration_days=7,
+            time_mode="on_hold",
+        )
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.lock_time = True
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(return_value={"status": "deleted"}),
+                ),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)) as provision,
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                service = await create_service(session, seller, body)
+
+            self.assertEqual(service.duration_days, 30)
+            self.assertEqual(service.time_mode, "date")
+            self.assertEqual(provision.await_args.kwargs["duration_days"], 30)
+            self.assertEqual(provision.await_args.kwargs["time_mode"], "date")
+
+    async def test_locked_volume_cannot_be_changed_after_creation(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.lock_volume = True
+            service = SellerService(
+                request_id="locked-volume-service-000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="LockedVolume",
+                upstream_url="https://panel.example/sub/locked-volume",
+                public_token="locked-volume-token",
+                public_url="https://api.example/token/locked-volume-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=100_000,
+            )
+            session.add(service)
+            await session.commit()
+
+            with self.assertRaises(HTTPException) as raised:
+                await update_service(
+                    session,
+                    service,
+                    ServiceUpdateBody(volume_gb=30, duration_days=30, time_mode="date"),
+                )
+            self.assertEqual(raised.exception.status_code, 403)
+
     async def test_remove_deletes_provider_subscription_and_local_row(self) -> None:
         async with self.sessions() as session:
             service = SellerService(

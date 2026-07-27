@@ -184,6 +184,7 @@ def _apply_offer(offer: SellerOffer, body: OfferBody) -> None:
     offer.panel_key = body.panel_key.strip()
     offer.price_toman = body.price_toman
     offer.volume_gb = body.volume_gb
+    offer.lock_volume = body.lock_volume
     offer.default_duration_days = body.default_duration_days
     offer.allowed_time_modes_json = json.dumps(body.allowed_time_modes, separators=(",", ":"))
     offer.default_time_mode = (
@@ -191,6 +192,7 @@ def _apply_offer(offer: SellerOffer, body: OfferBody) -> None:
         if body.default_time_mode in body.allowed_time_modes
         else body.allowed_time_modes[0]
     )
+    offer.lock_time = body.lock_time
     offer.name_prefix = body.name_prefix.strip()
     offer.panel_hwid_limit = body.panel_hwid_limit
     offer.subscription_device_limit = body.subscription_device_limit

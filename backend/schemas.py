@@ -52,9 +52,11 @@ class OfferBody(BaseModel):
     panel_key: str = Field(min_length=1, max_length=80)
     price_toman: int = Field(ge=0)
     volume_gb: int = Field(ge=0, le=100000)
+    lock_volume: bool = False
     default_duration_days: int = Field(default=30, ge=0, le=3650)
     allowed_time_modes: list[str] = Field(default_factory=lambda: ["date"])
     default_time_mode: str = "date"
+    lock_time: bool = False
     name_prefix: str = Field(default="PhantomSeller_1", min_length=1, max_length=120)
     panel_hwid_limit: int | None = Field(default=None, ge=0, le=1000)
     subscription_device_limit: int = Field(default=0, ge=0, le=1000)
