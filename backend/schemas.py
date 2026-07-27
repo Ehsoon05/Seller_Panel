@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class LoginBody(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class CreateServiceBody(BaseModel):
+    request_id: str = Field(pattern=r"^[A-Za-z0-9-]{16,80}$")
+    offer_id: int
+    display_name: str | None = Field(default=None, max_length=160)
+    duration_days: int | None = Field(default=None, ge=0, le=3650)
+    time_mode: str | None = None
+
+
+class SellerCreateBody(BaseModel):
+    username: str = Field(pattern=r"^[A-Za-z0-9_.-]{3,80}$")
+    display_name: str = Field(min_length=2, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+    initial_balance: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class SellerUpdateBody(BaseModel):
+    display_name: str | None = Field(default=None, min_length=2, max_length=120)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    is_active: bool | None = None
+
+
+class BalanceBody(BaseModel):
+    amount: int
+    description: str = Field(default="اصلاح موجودی توسط مدیر", max_length=300)
+
+
+class OfferBody(BaseModel):
+    title: str = Field(min_length=2, max_length=140)
+    panel_key: str = Field(min_length=1, max_length=80)
+    price_toman: int = Field(ge=0)
+    volume_gb: int = Field(ge=0, le=100000)
+    default_duration_days: int = Field(default=30, ge=0, le=3650)
+    allowed_time_modes: list[str] = Field(default_factory=lambda: ["date"])
+    default_time_mode: str = "date"
+    name_prefix: str = Field(default="PhantomSeller_1", min_length=1, max_length=120)
+    panel_hwid_limit: int | None = Field(default=None, ge=0, le=1000)
+    subscription_device_limit: int = Field(default=0, ge=0, le=1000)
+    profile_title: str | None = Field(default=None, max_length=160)
+    support_url: str | None = Field(default=None, max_length=500)
+    show_header: bool = True
+    show_config_preview: bool = True
+    info_proxies_enabled: bool = False
+    is_active: bool = True
+
+    @field_validator("allowed_time_modes")
+    @classmethod
+    def validate_modes(cls, value: list[str]) -> list[str]:
+        allowed = {"date", "on_hold", "unlimited"}
+        normalized = list(dict.fromkeys(item for item in value if item in allowed))
+        if not normalized:
+            raise ValueError("At least one time mode is required")
+        return normalized

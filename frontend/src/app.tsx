@@ -1,0 +1,418 @@
+import {
+  Activity,
+  ArrowLeft,
+  Check,
+  Clipboard,
+  Copy,
+  Gauge,
+  LayoutDashboard,
+  LoaderCircle,
+  LogOut,
+  Menu,
+  PackagePlus,
+  Power,
+  RefreshCw,
+  Search,
+  Server,
+  Wallet,
+  X,
+} from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+
+import { api, ApiError, bytes, date, relativeDays, statusLabel, toman } from "./lib";
+import type { Dashboard, Ledger, Offer, Seller, Service } from "./types";
+
+function Button({
+  children,
+  className = "",
+  variant = "default",
+  busy = false,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "default" | "secondary" | "danger" | "ghost";
+  busy?: boolean;
+}) {
+  return (
+    <button className={`button ${variant} ${className}`} disabled={busy || props.disabled} {...props}>
+      {busy ? <LoaderCircle className="spin" size={17} /> : children}
+    </button>
+  );
+}
+
+function Toast({ message, tone, onClose }: { message: string; tone: "ok" | "error"; onClose: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onClose, 3500);
+    return () => window.clearTimeout(timer);
+  }, [onClose]);
+  return (
+    <div className={`toast ${tone}`}>
+      {tone === "ok" ? <Check size={18} /> : <X size={18} />}
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function Login({ onLogin }: { onLogin: (seller: Seller) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const seller = await api<Seller>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      onLogin(seller);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "ورود انجام نشد.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="login-shell">
+      <section className="login-panel">
+        <div className="brand-mark">PH</div>
+        <div>
+          <p className="eyebrow">PHANTOM HUBS</p>
+          <h1>پنل همکاری</h1>
+          <p className="muted">مدیریت و ساخت سرویس‌های اختصاصی</p>
+        </div>
+        <form onSubmit={submit} className="form-stack">
+          <label>
+            نام کاربری
+            <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+          </label>
+          <label>
+            رمز عبور
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
+          </label>
+          {error && <p className="form-error">{error}</p>}
+          <Button type="submit" busy={busy}>ورود به پنل <ArrowLeft size={18} /></Button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function Shell({ seller, onLogout }: { seller: Seller; onLogout: () => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => setMenuOpen(false), [location.pathname]);
+  const links = [
+    { to: "/", label: "داشبورد", icon: LayoutDashboard, end: true },
+    { to: "/services", label: "سرویس‌ها", icon: Server },
+    { to: "/create", label: "ساخت سرویس", icon: PackagePlus },
+    { to: "/ledger", label: "گردش حساب", icon: Wallet },
+  ];
+  return (
+    <div className="app-shell">
+      <header className="mobile-header">
+        <button className="icon-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="منو"><Menu /></button>
+        <strong>Phantom Sellers</strong>
+        <span className="header-balance">{toman(seller.wallet_balance)}</span>
+      </header>
+      <aside className={menuOpen ? "sidebar open" : "sidebar"}>
+        <div className="sidebar-brand">
+          <div className="brand-mark small">PH</div>
+          <div><strong>Phantom Hubs</strong><span>Seller Panel</span></div>
+        </div>
+        <nav>
+          {links.map(({ to, label, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}>
+              <Icon size={19} /><span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <div className="seller-summary">
+          <span className="avatar">{seller.display_name.slice(0, 1)}</span>
+          <div><strong>{seller.display_name}</strong><small>@{seller.username}</small></div>
+          <button className="icon-button" onClick={onLogout} aria-label="خروج"><LogOut size={18} /></button>
+        </div>
+      </aside>
+      {menuOpen && <button className="scrim" onClick={() => setMenuOpen(false)} aria-label="بستن منو" />}
+      <section className="workspace">
+        <Routes>
+          <Route index element={<DashboardPage />} />
+          <Route path="services" element={<ServicesPage />} />
+          <Route path="create" element={<CreatePage />} />
+          <Route path="ledger" element={<LedgerPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </section>
+    </div>
+  );
+}
+
+function PageHead({ title, subtitle, action }: { title: string; subtitle: string; action?: React.ReactNode }) {
+  return (
+    <header className="page-head">
+      <div><h1>{title}</h1><p>{subtitle}</p></div>
+      {action}
+    </header>
+  );
+}
+
+function Stat({ label, value, icon: Icon, tone }: { label: string; value: string; icon: typeof Gauge; tone: string }) {
+  return (
+    <article className="stat">
+      <span className={`stat-icon ${tone}`}><Icon size={20} /></span>
+      <div><span>{label}</span><strong>{value}</strong></div>
+    </article>
+  );
+}
+
+function DashboardPage() {
+  const [data, setData] = useState<Dashboard | null>(null);
+  const [recent, setRecent] = useState<Service[]>([]);
+  useEffect(() => {
+    Promise.all([api<Dashboard>("/dashboard"), api<Service[]>("/services")]).then(([stats, rows]) => {
+      setData(stats);
+      setRecent(rows.slice(0, 5));
+    });
+  }, []);
+  return (
+    <>
+      <PageHead title="داشبورد" subtitle="نمای کلی فعالیت پنل همکاری شما" />
+      <div className="stats-grid">
+        <Stat label="موجودی پنل" value={data ? toman(data.wallet_balance) : "..."} icon={Wallet} tone="blue" />
+        <Stat label="سرویس‌های فعال" value={data ? data.active_services.toLocaleString("fa-IR") : "..."} icon={Activity} tone="green" />
+        <Stat label="کل سرویس‌ها" value={data ? data.total_services.toLocaleString("fa-IR") : "..."} icon={Server} tone="violet" />
+        <Stat label="خرید این ماه" value={data ? toman(data.monthly_spend) : "..."} icon={Gauge} tone="amber" />
+      </div>
+      <section className="section-block">
+        <div className="section-title"><div><h2>آخرین سرویس‌ها</h2><p>آخرین موارد ساخته‌شده در پنل</p></div><NavLink to="/services">مشاهده همه <ArrowLeft size={16} /></NavLink></div>
+        <ServiceTable services={recent} compact />
+      </section>
+    </>
+  );
+}
+
+function Usage({ service }: { service: Service }) {
+  const percent = service.data_limit_bytes
+    ? Math.min(100, Math.round((service.used_bytes / service.data_limit_bytes) * 100))
+    : 0;
+  return (
+    <div className="usage">
+      <div><span>{bytes(service.used_bytes)}</span><small>{service.data_limit_bytes ? `از ${bytes(service.data_limit_bytes)}` : "حجم نامحدود"}</small></div>
+      <div className="progress"><i style={{ width: `${percent}%` }} /></div>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`status ${status}`}>{statusLabel(status)}</span>;
+}
+
+function ServiceTable({
+  services,
+  compact = false,
+  onRefresh,
+  onToggle,
+  busyId,
+  notify,
+}: {
+  services: Service[];
+  compact?: boolean;
+  onRefresh?: (service: Service) => void;
+  onToggle?: (service: Service) => void;
+  busyId?: number | null;
+  notify?: (message: string) => void;
+}) {
+  const copy = async (value: string) => {
+    await navigator.clipboard.writeText(value);
+    notify?.("لینک اشتراک کپی شد.");
+  };
+  if (!services.length) return <div className="empty"><Server size={30} /><strong>هنوز سرویسی وجود ندارد</strong><span>از بخش ساخت سرویس، اولین مورد را ایجاد کنید.</span></div>;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>نام سرویس</th><th>وضعیت</th><th>مصرف</th><th>زمان</th>{!compact && <th>عملیات</th>}</tr></thead>
+        <tbody>
+          {services.map((service) => (
+            <tr key={service.id}>
+              <td data-label="نام سرویس"><div className="service-name"><span className="server-icon"><Server size={18} /></span><div><strong>{service.display_name || service.panel_username}</strong><small>{service.panel_username}</small></div></div></td>
+              <td data-label="وضعیت"><StatusBadge status={service.status} /></td>
+              <td data-label="مصرف"><Usage service={service} /></td>
+              <td data-label="زمان"><div className="time-cell"><strong>{relativeDays(service.expires_at)}</strong><small>{service.expires_at ? date(service.expires_at) : "نامحدود"}</small></div></td>
+              {!compact && (
+                <td data-label="عملیات">
+                  <div className="row-actions">
+                    <button className="icon-button" onClick={() => copy(service.public_url)} title="کپی لینک"><Copy size={17} /></button>
+                    <button className="icon-button" onClick={() => onRefresh?.(service)} disabled={busyId === service.id} title="به‌روزرسانی">
+                      <RefreshCw size={17} className={busyId === service.id ? "spin" : ""} />
+                    </button>
+                    <button className={`icon-button ${service.status === "disabled" ? "enable" : "disable"}`} onClick={() => onToggle?.(service)} disabled={busyId === service.id} title={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"}><Power size={17} /></button>
+                  </div>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ServicesPage() {
+  const [services, setServices] = useState<Service[]>([]);
+  const [query, setQuery] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [toast, setToast] = useState<{ message: string; tone: "ok" | "error" } | null>(null);
+  const load = useCallback(async () => {
+    const suffix = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+    setServices(await api<Service[]>(`/services${suffix}`));
+  }, [query]);
+  useEffect(() => { const timer = window.setTimeout(() => void load(), 250); return () => window.clearTimeout(timer); }, [load]);
+  async function action(service: Service, type: "refresh" | "toggle") {
+    setBusyId(service.id);
+    try {
+      const updated = type === "refresh"
+        ? await api<Service>(`/services/${service.id}/refresh`, { method: "POST" })
+        : await api<Service>(`/services/${service.id}/status?enabled=${service.status === "disabled"}`, { method: "POST" });
+      setServices((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setToast({ message: type === "refresh" ? "اطلاعات سرویس به‌روز شد." : "وضعیت سرویس تغییر کرد.", tone: "ok" });
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "عملیات انجام نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+  return (
+    <>
+      <PageHead title="سرویس‌ها" subtitle="جست‌وجو، بررسی مصرف و مدیریت سرویس‌های ساخته‌شده" action={<NavLink className="button default" to="/create"><PackagePlus size={18} /> ساخت سرویس</NavLink>} />
+      <div className="toolbar">
+        <label className="search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجو با نام، یوزرنیم یا لینک..." /></label>
+        <span>{services.length.toLocaleString("fa-IR")} سرویس</span>
+      </div>
+      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+    </>
+  );
+}
+
+function CreatePage() {
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [offerId, setOfferId] = useState<number | null>(null);
+  const [displayName, setDisplayName] = useState("");
+  const [duration, setDuration] = useState(30);
+  const [mode, setMode] = useState("date");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { api<Offer[]>("/offers").then((rows) => { setOffers(rows); if (rows[0]) setOfferId(rows[0].id); }); }, []);
+  const offer = useMemo(() => offers.find((item) => item.id === offerId), [offers, offerId]);
+  useEffect(() => {
+    if (!offer) return;
+    setDuration(offer.default_duration_days);
+    setMode(offer.default_time_mode);
+  }, [offer]);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!offer) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api<Service>("/services", {
+        method: "POST",
+        body: JSON.stringify({
+          request_id: crypto.randomUUID(),
+          offer_id: offer.id,
+          display_name: displayName || null,
+          duration_days: mode === "unlimited" ? 0 : duration,
+          time_mode: mode,
+        }),
+      });
+      window.location.assign("/services");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "ساخت سرویس انجام نشد.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <PageHead title="ساخت سرویس" subtitle="پلن موردنظر را انتخاب و سرویس را مستقیم از پنل ایجاد کنید" />
+      <form className="create-layout" onSubmit={submit}>
+        <section className="form-panel">
+          <div className="step-head"><span>۱</span><div><h2>انتخاب سرویس</h2><p>قیمت و ویژگی‌ها مخصوص حساب شماست.</p></div></div>
+          <div className="offer-grid">
+            {offers.map((item) => (
+              <button type="button" key={item.id} className={offerId === item.id ? "offer selected" : "offer"} onClick={() => setOfferId(item.id)}>
+                <div><strong>{item.title}</strong><span>{item.volume_gb ? `${item.volume_gb} GB` : "حجم نامحدود"}</span></div>
+                <b>{toman(item.price_toman)}</b>
+                <i>{offerId === item.id && <Check size={15} />}</i>
+              </button>
+            ))}
+          </div>
+          {!offers.length && <div className="empty"><PackagePlus size={30} /><strong>سرویسی برای شما تعریف نشده</strong><span>با مدیریت تماس بگیرید.</span></div>}
+          {offer && (
+            <>
+              <div className="step-head"><span>۲</span><div><h2>مشخصات ساخت</h2><p>نام دلخواه فقط داخل پنل شما نمایش داده می‌شود.</p></div></div>
+              <div className="form-grid">
+                <label className="wide">نام دلخواه مشتری<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="مثلاً مشتری فروشگاه یک" /></label>
+                <label>نوع شروع<select value={mode} onChange={(event) => setMode(event.target.value)}>{offer.allowed_time_modes.map((item) => <option key={item} value={item}>{item === "date" ? "تاریخ‌دار از همین لحظه" : item === "on_hold" ? "شروع با اولین اتصال" : "بدون محدودیت زمانی"}</option>)}</select></label>
+                {mode !== "unlimited" && <label>مدت سرویس (روز)<input type="number" min="1" max="3650" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></label>}
+              </div>
+            </>
+          )}
+          {error && <p className="form-error">{error}</p>}
+        </section>
+        <aside className="order-summary">
+          <h2>خلاصه سفارش</h2>
+          <dl>
+            <div><dt>سرویس</dt><dd>{offer?.title || "-"}</dd></div>
+            <div><dt>حجم</dt><dd>{offer ? (offer.volume_gb ? `${offer.volume_gb} GB` : "نامحدود") : "-"}</dd></div>
+            <div><dt>مدت</dt><dd>{mode === "unlimited" ? "نامحدود" : `${duration.toLocaleString("fa-IR")} روز`}</dd></div>
+            <div><dt>محدودیت دستگاه</dt><dd>{offer?.subscription_device_limit ? `${offer.subscription_device_limit.toLocaleString("fa-IR")} دستگاه` : "نامحدود"}</dd></div>
+          </dl>
+          <div className="total"><span>مبلغ قابل پرداخت</span><strong>{offer ? toman(offer.price_toman) : "-"}</strong></div>
+          <Button type="submit" busy={busy} disabled={!offer}>ساخت و دریافت لینک <ArrowLeft size={18} /></Button>
+          <p className="hint">پس از ساخت موفق، مبلغ از موجودی پنل کسر می‌شود.</p>
+        </aside>
+      </form>
+    </>
+  );
+}
+
+function LedgerPage() {
+  const [rows, setRows] = useState<Ledger[]>([]);
+  useEffect(() => { api<Ledger[]>("/ledger").then(setRows); }, []);
+  return (
+    <>
+      <PageHead title="گردش حساب" subtitle="ریز افزایش موجودی، خریدها و بازگشت وجه" />
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>شرح</th><th>نوع</th><th>مبلغ</th><th>موجودی پس از تراکنش</th><th>تاریخ</th></tr></thead>
+          <tbody>
+            {rows.map((row) => <tr key={row.id}><td data-label="شرح"><strong>{row.description}</strong></td><td data-label="نوع"><span className={`ledger-kind ${row.amount >= 0 ? "positive" : "negative"}`}>{row.kind === "purchase" ? "خرید" : row.kind === "refund" ? "بازگشت وجه" : row.amount >= 0 ? "افزایش" : "کاهش"}</span></td><td data-label="مبلغ" className={row.amount >= 0 ? "money positive" : "money negative"}>{row.amount >= 0 ? "+" : ""}{toman(row.amount)}</td><td data-label="موجودی">{toman(row.balance_after)}</td><td data-label="تاریخ"><small>{date(row.created_at)}</small></td></tr>)}
+          </tbody>
+        </table>
+        {!rows.length && <div className="empty"><Clipboard size={30} /><strong>گردش حساب خالی است</strong></div>}
+      </div>
+    </>
+  );
+}
+
+export function App() {
+  const [seller, setSeller] = useState<Seller | null | undefined>(undefined);
+  useEffect(() => {
+    api<Seller>("/me").then(setSeller).catch((reason) => {
+      if (reason instanceof ApiError && reason.status === 401) setSeller(null);
+      else setSeller(null);
+    });
+  }, []);
+  async function logout() {
+    await api("/auth/logout", { method: "POST" });
+    setSeller(null);
+  }
+  if (seller === undefined) return <div className="boot"><LoaderCircle className="spin" /><span>در حال آماده‌سازی پنل...</span></div>;
+  if (!seller) return <Login onLogin={setSeller} />;
+  return <Shell seller={seller} onLogout={logout} />;
+}

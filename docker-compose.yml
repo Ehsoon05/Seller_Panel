@@ -1,0 +1,27 @@
+services:
+  seller-panel:
+    build: .
+    container_name: phantom-seller-panel
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8087:8087"
+    volumes:
+      - seller-data:/data
+      - ${PHANTOM_DATABASE_HOST_PATH:-/opt/phantom/bot_data.db}:/data/phantom.db:ro
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/seller_panel.db
+      PHANTOM_DATABASE_PATH: /data/phantom.db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8087/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    mem_limit: 384m
+    cpus: 0.75
+
+volumes:
+  seller-data:
+
