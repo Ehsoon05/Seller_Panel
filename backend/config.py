@@ -18,10 +18,20 @@ class Settings(BaseSettings):
     subscription_public_base_url: str = "https://api.phantomhubs.shop"
     cors_origins: str = "https://sellers.phantomhubs.shop,https://admin.phantomhubs.shop"
     cookie_secure: bool = True
+    notification_bot_token: str = ""
+    notification_chat_ids: str = ""
 
     @property
     def allowed_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def notification_recipients(self) -> list[int]:
+        return [
+            int(item.strip())
+            for item in self.notification_chat_ids.split(",")
+            if item.strip().lstrip("-").isdigit()
+        ]
 
 
 @lru_cache

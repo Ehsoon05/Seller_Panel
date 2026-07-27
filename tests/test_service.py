@@ -4,15 +4,16 @@ import unittest
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.database import Base
 from backend.models import Seller, SellerLedger, SellerOffer, SellerService
 from backend.panels import Panel, PanelError
-from backend.schemas import CreateServiceBody
+from backend.schemas import CreateServiceBody, ServiceUpdateBody
 from backend.security import hash_password
-from backend.service import create_service, dashboard
+from backend.service import create_service, dashboard, remove_service, update_service
 
 
 class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -150,7 +151,138 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["active_services"], 1)
         self.assertEqual(value["used_bytes"], 1024)
 
+    async def test_explicit_duplicate_username_is_rejected_before_charge(self) -> None:
+        body = CreateServiceBody(
+            request_id="duplicate-user-0000000000001",
+            offer_id=self.offer_id,
+            panel_username="TakenUser",
+            duration_days=30,
+            time_mode="date",
+        )
+        async with self.sessions() as session:
+            seller = await session.get(Seller, self.seller_id)
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(return_value={"status": "active"}),
+                ),
+                patch("backend.service.create_user", AsyncMock()) as provision,
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await create_service(session, seller, body)
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertIn("TakenUser", raised.exception.detail)
+            provision.assert_not_awaited()
+            await session.refresh(seller)
+            self.assertEqual(seller.wallet_balance, 500_000)
+
+    async def test_allowed_debt_can_cross_zero(self) -> None:
+        payload = {
+            "username": "DebtUser",
+            "status": "active",
+            "used_traffic": 0,
+            "data_limit": 20 * 1024**3,
+            "expire": 1_900_000_000,
+            "_subscription_url": "https://panel.example/sub/debt",
+        }
+        body = CreateServiceBody(
+            request_id="debt-service-00000000000001",
+            offer_id=self.offer_id,
+            panel_username="DebtUser",
+            duration_days=30,
+            time_mode="date",
+        )
+        async with self.sessions() as session:
+            seller = await session.get(Seller, self.seller_id)
+            seller.wallet_balance = 0
+            seller.allow_negative_balance = True
+            await session.commit()
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(return_value={"status": "deleted"}),
+                ),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)),
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                await create_service(session, seller, body)
+            await session.refresh(seller)
+            self.assertEqual(seller.wallet_balance, -100_000)
+
+    async def test_remove_deletes_provider_subscription_and_local_row(self) -> None:
+        async with self.sessions() as session:
+            service = SellerService(
+                request_id="remove-service-000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="RemoveMe",
+                upstream_url="https://panel.example/sub/remove",
+                public_token="remove-token",
+                public_url="https://api.example/token/remove-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=100_000,
+            )
+            session.add(service)
+            await session.commit()
+            await session.refresh(service)
+            service_id = service.id
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.delete_user", AsyncMock()) as provider_delete,
+                patch("backend.service.delete_subscription", AsyncMock()) as sub_delete,
+            ):
+                await remove_service(session, service)
+            provider_delete.assert_awaited_once()
+            sub_delete.assert_awaited_once()
+            self.assertIsNone(await session.get(SellerService, service_id))
+
+    async def test_edit_updates_provider_cache_and_subscription(self) -> None:
+        async with self.sessions() as session:
+            service = SellerService(
+                request_id="edit-service-00000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="EditMe",
+                upstream_url="https://panel.example/sub/edit",
+                public_token="edit-token",
+                public_url="https://api.example/token/edit-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=100_000,
+            )
+            session.add(service)
+            await session.commit()
+            await session.refresh(service)
+            body = ServiceUpdateBody(volume_gb=50, duration_days=45, time_mode="date")
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.update_user",
+                    AsyncMock(
+                        return_value={
+                            "status": "active",
+                            "data_limit": 50 * 1024**3,
+                            "expire": 1_950_000_000,
+                        }
+                    ),
+                ) as provider_update,
+                patch("backend.service.sync_subscription", AsyncMock()) as sub_sync,
+            ):
+                updated = await update_service(session, service, body)
+            provider_update.assert_awaited_once()
+            sub_sync.assert_awaited_once()
+            self.assertEqual(updated.volume_gb, 50)
+            self.assertEqual(updated.duration_days, 45)
+            self.assertEqual(updated.data_limit_bytes, 50 * 1024**3)
+
 
 if __name__ == "__main__":
     unittest.main()
-

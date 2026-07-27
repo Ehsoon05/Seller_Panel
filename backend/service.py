@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import html
 import json
+import logging
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
@@ -13,8 +15,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
 from .models import Seller, SellerLedger, SellerOffer, SellerService
-from .panels import PanelError, create_user, delete_user, fetch_user, get_panel, set_user_status
-from .schemas import CreateServiceBody
+from .panels import (
+    PanelError,
+    create_user,
+    delete_user,
+    fetch_user,
+    get_panel,
+    set_user_status,
+    update_user,
+)
+from .schemas import CreateServiceBody, ServiceUpdateBody
+
+
+logger = logging.getLogger(__name__)
 
 
 def allowed_time_modes(offer: SellerOffer) -> list[str]:
@@ -47,6 +60,7 @@ def seller_out(seller: Seller) -> dict:
         "username": seller.username,
         "display_name": seller.display_name,
         "wallet_balance": seller.wallet_balance,
+        "allow_negative_balance": seller.allow_negative_balance,
         "is_active": seller.is_active,
         "created_at": seller.created_at,
         "updated_at": seller.updated_at,
@@ -140,6 +154,66 @@ async def sync_subscription(service: SellerService, offer: SellerOffer) -> None:
         response.raise_for_status()
 
 
+async def delete_subscription(service: SellerService) -> None:
+    if not settings.subscription_sync_url or not settings.subscription_sync_token:
+        return
+    url = f"{settings.subscription_sync_url.rstrip('/')}/{quote(service.public_token, safe='')}"
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.delete(
+            url,
+            headers={"Authorization": f"Bearer {settings.subscription_sync_token}"},
+        )
+    if response.status_code not in {200, 204, 404}:
+        response.raise_for_status()
+
+
+async def notify_service_created(
+    seller: Seller,
+    offer: SellerOffer,
+    service: SellerService,
+) -> None:
+    if not settings.notification_bot_token or not settings.notification_recipients:
+        return
+    duration = (
+        "نامحدود"
+        if service.duration_days == 0
+        else f"{service.duration_days:,} روز"
+    )
+    volume = "نامحدود" if service.volume_gb == 0 else f"{service.volume_gb:,} گیگ"
+    mode = {
+        "date": "Active - تاریخ‌دار",
+        "on_hold": "On Hold - شروع با اولین اتصال",
+        "unlimited": "Active - بدون محدودیت زمانی",
+    }.get(service.time_mode, service.time_mode)
+    text = (
+        "<b>ساخت موفق سرویس همکاری</b>\n\n"
+        f"همکار: {html.escape(seller.display_name)} (@{html.escape(seller.username)})\n"
+        f"سرویس: {html.escape(offer.title)}\n"
+        f"یوزرنیم کانفیگ: <code>{html.escape(service.panel_username)}</code>\n"
+        f"پنل سازنده: <code>{html.escape(service.panel_key)}</code>\n"
+        f"حجم: {volume}\n"
+        f"مدت: {duration}\n"
+        f"نوع ساخت: {html.escape(mode)}\n"
+        f"مبلغ: {service.price_toman:,} تومان\n"
+        f"موجودی همکار: {seller.wallet_balance:,} تومان"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            for chat_id in settings.notification_recipients:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{settings.notification_bot_token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    },
+                )
+                response.raise_for_status()
+    except Exception:
+        logger.exception("Could not send seller service notification")
+
+
 async def create_service(
     session: AsyncSession,
     seller: Seller,
@@ -182,10 +256,29 @@ async def create_service(
     elif duration_days <= 0:
         raise HTTPException(status_code=400, detail="مدت سرویس باید بیشتر از صفر باشد.")
 
+    panel = get_panel(offer.panel_key)
+    requested_username = (body.panel_username or "").strip()
+    username = requested_username or _username_for_offer(offer)
+    if requested_username:
+        current = await fetch_user(panel, username)
+        if str(current.get("status") or "") != "deleted":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"یوزرنیم «{username}» از قبل در پنل {panel.title} وجود دارد. "
+                    "یک یوزرنیم دیگر وارد کنید."
+                ),
+            )
+
+    balance_condition = (
+        Seller.id == seller.id
+        if seller.allow_negative_balance
+        else (Seller.id == seller.id) & (Seller.wallet_balance >= offer.price_toman)
+    )
     charged = (
         await session.execute(
             update(Seller)
-            .where(Seller.id == seller.id, Seller.wallet_balance >= offer.price_toman)
+            .where(balance_condition)
             .values(
                 wallet_balance=Seller.wallet_balance - offer.price_toman,
                 updated_at=datetime.now(timezone.utc),
@@ -194,7 +287,6 @@ async def create_service(
     ).rowcount
     if not charged:
         raise HTTPException(status_code=409, detail="موجودی پنل برای ساخت این سرویس کافی نیست.")
-    username = _username_for_offer(offer)
     await session.flush()
     balance = await session.scalar(select(Seller.wallet_balance).where(Seller.id == seller.id))
     purchase_ledger = SellerLedger(
@@ -208,7 +300,6 @@ async def create_service(
     await session.commit()
     await session.refresh(offer)
 
-    panel = get_panel(offer.panel_key)
     try:
         payload = await create_user(
             panel,
@@ -218,8 +309,15 @@ async def create_service(
             time_mode=mode,
             hwid_limit=offer.panel_hwid_limit,
         )
-    except Exception:
+    except Exception as exc:
         await _refund(session, seller.id, offer.price_toman, f"بازگشت وجه ساخت ناموفق {username}")
+        detail = str(exc) or "پنل سازنده ساخت سرویس را نپذیرفت."
+        lowered = detail.casefold()
+        if any(value in lowered for value in ("already exist", "duplicate", "exists")):
+            raise HTTPException(
+                status_code=409,
+                detail=f"یوزرنیم «{username}» قبلاً در پنل سازنده ثبت شده است.",
+            ) from exc
         raise
 
     public_token = secrets.token_urlsafe(32)
@@ -233,7 +331,7 @@ async def create_service(
         offer_id=offer.id,
         panel_key=panel.key,
         panel_username=str(payload.get("username") or username),
-        display_name=(body.display_name or "").strip() or None,
+        display_name=username,
         upstream_url=str(payload["_subscription_url"]),
         public_token=public_token,
         public_url=public_url,
@@ -262,6 +360,8 @@ async def create_service(
         finally:
             await _refund(session, seller.id, offer.price_toman, f"بازگشت وجه ثبت ناموفق {username}")
         raise
+    await session.refresh(seller)
+    await notify_service_created(seller, offer, service)
     return service
 
 
@@ -313,6 +413,69 @@ async def toggle_service(
     await session.commit()
     await session.refresh(service)
     return service
+
+
+async def update_service(
+    session: AsyncSession,
+    service: SellerService,
+    body: ServiceUpdateBody,
+) -> SellerService:
+    offer = await session.get(SellerOffer, service.offer_id)
+    if offer is None:
+        raise HTTPException(status_code=409, detail="پلن سازنده این سرویس پیدا نشد.")
+    if body.time_mode not in allowed_time_modes(offer):
+        raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
+    if body.time_mode != "unlimited" and body.duration_days <= 0:
+        raise HTTPException(status_code=400, detail="مدت سرویس باید بیشتر از صفر باشد.")
+    duration_days = 0 if body.time_mode == "unlimited" else body.duration_days
+    panel = get_panel(service.panel_key)
+    payload = await update_user(
+        panel,
+        username=service.panel_username,
+        volume_gb=body.volume_gb,
+        duration_days=duration_days,
+        time_mode=body.time_mode,
+    )
+    service.volume_gb = body.volume_gb
+    service.duration_days = duration_days
+    service.time_mode = body.time_mode
+    service.status = str(
+        payload.get("status")
+        or ("on_hold" if body.time_mode == "on_hold" else "active")
+    )
+    service.data_limit_bytes = int(
+        payload.get("data_limit")
+        if payload.get("data_limit") is not None
+        else body.volume_gb * 1024**3
+    )
+    service.used_bytes = int(payload.get("used_traffic") or service.used_bytes or 0)
+    service.expires_at = (
+        _timestamp(payload.get("expire"))
+        if payload.get("expire") is not None
+        else (
+            None
+            if duration_days == 0 or body.time_mode == "on_hold"
+            else datetime.now(timezone.utc) + timedelta(days=duration_days)
+        )
+    )
+    service.last_refreshed_at = datetime.now(timezone.utc)
+    await sync_subscription(service, offer)
+    await session.commit()
+    await session.refresh(service)
+    return service
+
+
+async def remove_service(session: AsyncSession, service: SellerService) -> None:
+    panel = get_panel(service.panel_key)
+    await delete_user(panel, service.panel_username)
+    await delete_subscription(service)
+    await session.execute(
+        update(SellerLedger)
+        .where(SellerLedger.service_id == service.id)
+        .values(service_id=None)
+    )
+    await session.delete(service)
+    await session.commit()
 
 
 async def dashboard(session: AsyncSession, seller_id: int) -> dict:

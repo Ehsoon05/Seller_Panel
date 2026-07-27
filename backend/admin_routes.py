@@ -11,7 +11,7 @@ from .models import Seller, SellerLedger, SellerOffer, SellerService
 from .panels import PanelError, list_panels
 from .schemas import BalanceBody, OfferBody, SellerCreateBody, SellerUpdateBody
 from .security import current_admin, get_session, hash_password
-from .service import offer_out, seller_out, service_out
+from .service import offer_out, remove_service, seller_out, service_out
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(current_admin)])
 
@@ -87,8 +87,14 @@ async def create_seller(body: SellerCreateBody, session: AsyncSession = Depends(
         display_name=body.display_name.strip(),
         password_hash=hash_password(body.password),
         wallet_balance=body.initial_balance,
+        allow_negative_balance=body.allow_negative_balance,
         is_active=body.is_active,
     )
+    if body.initial_balance < 0 and not body.allow_negative_balance:
+        raise HTTPException(
+            status_code=400,
+            detail="برای موجودی اولیه منفی باید مجوز بدهکاری این همکار فعال باشد.",
+        )
     session.add(seller)
     await session.flush()
     if body.initial_balance:
@@ -119,6 +125,13 @@ async def update_seller(
         seller.display_name = body.display_name.strip()
     if body.password is not None:
         seller.password_hash = hash_password(body.password)
+    if body.allow_negative_balance is not None:
+        if not body.allow_negative_balance and seller.wallet_balance < 0:
+            raise HTTPException(
+                status_code=409,
+                detail="ابتدا بدهی همکار را تسویه کنید، سپس مجوز بدهکاری را ببندید.",
+            )
+        seller.allow_negative_balance = body.allow_negative_balance
     if body.is_active is not None:
         seller.is_active = body.is_active
     seller.updated_at = datetime.now(timezone.utc)
@@ -137,7 +150,7 @@ async def adjust_balance(
     if seller is None:
         raise HTTPException(status_code=404, detail="همکار پیدا نشد.")
     new_balance = seller.wallet_balance + body.amount
-    if new_balance < 0:
+    if new_balance < 0 and not seller.allow_negative_balance:
         raise HTTPException(status_code=409, detail="موجودی نمی‌تواند منفی شود.")
     seller.wallet_balance = new_balance
     seller.updated_at = datetime.now(timezone.utc)
@@ -273,6 +286,21 @@ async def services(
     return [service_out(row) for row in rows]
 
 
+@router.delete("/services/{service_id}")
+async def delete_service_as_admin(
+    service_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    service = await session.get(SellerService, service_id)
+    if service is None:
+        raise HTTPException(status_code=404, detail="یوزر ساخته‌شده پیدا نشد.")
+    try:
+        await remove_service(session, service)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "حذف یوزر انجام نشد.") from exc
+    return {"deleted": True}
+
+
 @router.get("/sellers/{seller_id}/ledger")
 async def ledger(seller_id: int, session: AsyncSession = Depends(get_session)):
     rows = (
@@ -295,4 +323,3 @@ async def ledger(seller_id: int, session: AsyncSession = Depends(get_session)):
         }
         for row in rows
     ]
-

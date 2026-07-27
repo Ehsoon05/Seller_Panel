@@ -2,6 +2,7 @@ import {
   Activity,
   ArrowLeft,
   Check,
+  ChevronDown,
   Clipboard,
   Copy,
   Gauge,
@@ -10,10 +11,12 @@ import {
   LogOut,
   Menu,
   PackagePlus,
+  Pencil,
   Power,
   RefreshCw,
   Search,
   Server,
+  Trash2,
   Wallet,
   X,
 } from "lucide-react";
@@ -216,6 +219,8 @@ function ServiceTable({
   compact = false,
   onRefresh,
   onToggle,
+  onEdit,
+  onDelete,
   busyId,
   notify,
 }: {
@@ -223,6 +228,8 @@ function ServiceTable({
   compact?: boolean;
   onRefresh?: (service: Service) => void;
   onToggle?: (service: Service) => void;
+  onEdit?: (service: Service) => void;
+  onDelete?: (service: Service) => void;
   busyId?: number | null;
   notify?: (message: string) => void;
 }) {
@@ -238,7 +245,15 @@ function ServiceTable({
         <tbody>
           {services.map((service) => (
             <tr key={service.id}>
-              <td data-label="نام سرویس"><div className="service-name"><span className="server-icon"><Server size={18} /></span><div><strong>{service.display_name || service.panel_username}</strong><small>{service.panel_username}</small></div></div></td>
+              <td data-label="نام سرویس">
+                <div className="service-name"><span className="server-icon"><Server size={18} /></span><div><strong>{service.panel_username}</strong><small>{service.panel_key}</small></div></div>
+                <details className="mobile-service-details">
+                  <summary>جزئیات بیشتر <ChevronDown size={14} /></summary>
+                  <div><span>وضعیت</span><StatusBadge status={service.status} /></div>
+                  <div><span>مصرف</span><Usage service={service} /></div>
+                  <div><span>زمان</span><div className="time-cell"><strong>{relativeDays(service.expires_at)}</strong><small>{service.expires_at ? date(service.expires_at) : "نامحدود"}</small></div></div>
+                </details>
+              </td>
               <td data-label="وضعیت"><StatusBadge status={service.status} /></td>
               <td data-label="مصرف"><Usage service={service} /></td>
               <td data-label="زمان"><div className="time-cell"><strong>{relativeDays(service.expires_at)}</strong><small>{service.expires_at ? date(service.expires_at) : "نامحدود"}</small></div></td>
@@ -250,6 +265,8 @@ function ServiceTable({
                       <RefreshCw size={17} className={busyId === service.id ? "spin" : ""} />
                     </button>
                     <button className={`icon-button ${service.status === "disabled" ? "enable" : "disable"}`} onClick={() => onToggle?.(service)} disabled={busyId === service.id} title={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"}><Power size={17} /></button>
+                    <button className="icon-button" onClick={() => onEdit?.(service)} disabled={busyId === service.id} title="ویرایش"><Pencil size={17} /></button>
+                    <button className="icon-button danger-icon" onClick={() => onDelete?.(service)} disabled={busyId === service.id} title="حذف کامل"><Trash2 size={17} /></button>
                   </div>
                 </td>
               )}
@@ -263,13 +280,17 @@ function ServiceTable({
 
 function ServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
+  const [offers, setOffers] = useState<Offer[]>([]);
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [editing, setEditing] = useState<Service | null>(null);
+  const [editForm, setEditForm] = useState({ volume_gb: 0, duration_days: 30, time_mode: "date" });
   const [toast, setToast] = useState<{ message: string; tone: "ok" | "error" } | null>(null);
   const load = useCallback(async () => {
     const suffix = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
     setServices(await api<Service[]>(`/services${suffix}`));
   }, [query]);
+  useEffect(() => { void api<Offer[]>("/offers").then(setOffers); }, []);
   useEffect(() => { const timer = window.setTimeout(() => void load(), 250); return () => window.clearTimeout(timer); }, [load]);
   async function action(service: Service, type: "refresh" | "toggle") {
     setBusyId(service.id);
@@ -285,6 +306,49 @@ function ServicesPage() {
       setBusyId(null);
     }
   }
+  function openEdit(service: Service) {
+    setEditing(service);
+    setEditForm({
+      volume_gb: service.volume_gb,
+      duration_days: service.duration_days || 30,
+      time_mode: service.time_mode,
+    });
+  }
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing) return;
+    setBusyId(editing.id);
+    try {
+      const updated = await api<Service>(`/services/${editing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...editForm,
+          duration_days: editForm.time_mode === "unlimited" ? 0 : editForm.duration_days,
+        }),
+      });
+      setServices((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditing(null);
+      setToast({ message: "مشخصات یوزر روی پنل سازنده ویرایش شد.", tone: "ok" });
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "ویرایش انجام نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function remove(service: Service) {
+    if (!window.confirm(`یوزر «${service.panel_username}» از پنل سازنده و پنل ساب کاملاً حذف شود؟ این عملیات قابل بازگشت نیست.`)) return;
+    setBusyId(service.id);
+    try {
+      await api(`/services/${service.id}`, { method: "DELETE" });
+      setServices((items) => items.filter((item) => item.id !== service.id));
+      setToast({ message: "یوزر از پنل سازنده و پنل ساب حذف شد.", tone: "ok" });
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "حذف انجام نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+  const editingOffer = editing ? offers.find((item) => item.id === editing.offer_id) : null;
   return (
     <>
       <PageHead title="سرویس‌ها" subtitle="جست‌وجو، بررسی مصرف و مدیریت سرویس‌های ساخته‌شده" action={<NavLink className="button default" to="/create"><PackagePlus size={18} /> ساخت سرویس</NavLink>} />
@@ -292,7 +356,33 @@ function ServicesPage() {
         <label className="search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجو با نام، یوزرنیم یا لینک..." /></label>
         <span>{services.length.toLocaleString("fa-IR")} سرویس</span>
       </div>
-      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
+      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} onEdit={openEdit} onDelete={(value) => void remove(value)} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
+      {editing && (
+        <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setEditing(null)}>
+          <form className="edit-modal" onSubmit={saveEdit}>
+            <div className="modal-head">
+              <div><h2>ویرایش یوزر</h2><p>{editing.panel_username}</p></div>
+              <button type="button" className="icon-button" onClick={() => setEditing(null)} aria-label="بستن"><X size={18} /></button>
+            </div>
+            <div className="form-grid">
+              <label>حجم (GB، صفر نامحدود)<input type="number" min="0" max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>
+              <label>نوع تاریخ
+                <select value={editForm.time_mode} onChange={(event) => setEditForm({ ...editForm, time_mode: event.target.value })}>
+                  {(editingOffer?.allowed_time_modes || ["date", "on_hold", "unlimited"]).map((item) => (
+                    <option key={item} value={item}>{item === "date" ? "تاریخ‌دار - Active" : item === "on_hold" ? "شروع با اولین اتصال - On Hold" : "بدون محدودیت زمانی - Active"}</option>
+                  ))}
+                </select>
+              </label>
+              {editForm.time_mode !== "unlimited" && <label className="wide">مدت از اکنون (روز)<input type="number" min="1" max="3650" value={editForm.duration_days} onChange={(event) => setEditForm({ ...editForm, duration_days: Number(event.target.value) })} /></label>}
+            </div>
+            <p className="edit-warning">ثبت ویرایش، حجم و تاریخ یوزر را روی پنل سازنده با همین مقادیر به‌روزرسانی می‌کند.</p>
+            <div className="modal-actions">
+              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>انصراف</Button>
+              <Button type="submit" busy={busyId === editing.id}><Pencil size={17} /> ذخیره تغییرات</Button>
+            </div>
+          </form>
+        </div>
+      )}
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
     </>
   );
@@ -324,7 +414,8 @@ function CreatePage() {
         body: JSON.stringify({
           request_id: crypto.randomUUID(),
           offer_id: offer.id,
-          display_name: displayName || null,
+          panel_username: displayName.trim(),
+          display_name: null,
           duration_days: mode === "unlimited" ? 0 : duration,
           time_mode: mode,
         }),
@@ -354,10 +445,10 @@ function CreatePage() {
           {!offers.length && <div className="empty"><PackagePlus size={30} /><strong>سرویسی برای شما تعریف نشده</strong><span>با مدیریت تماس بگیرید.</span></div>}
           {offer && (
             <>
-              <div className="step-head"><span>۲</span><div><h2>مشخصات ساخت</h2><p>نام دلخواه فقط داخل پنل شما نمایش داده می‌شود.</p></div></div>
+              <div className="step-head"><span>۲</span><div><h2>مشخصات ساخت</h2><p>یوزرنیم مستقیماً داخل پنل سازنده ثبت می‌شود و باید یکتا باشد.</p></div></div>
               <div className="form-grid">
-                <label className="wide">نام دلخواه مشتری<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="مثلاً مشتری فروشگاه یک" /></label>
-                <label>نوع شروع<select value={mode} onChange={(event) => setMode(event.target.value)}>{offer.allowed_time_modes.map((item) => <option key={item} value={item}>{item === "date" ? "تاریخ‌دار از همین لحظه" : item === "on_hold" ? "شروع با اولین اتصال" : "بدون محدودیت زمانی"}</option>)}</select></label>
+                <label className="wide">یوزرنیم کانفیگ<input dir="ltr" required minLength={3} maxLength={120} pattern="[A-Za-z0-9_-]+" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+                <label>نوع تاریخ<select value={mode} onChange={(event) => setMode(event.target.value)}>{offer.allowed_time_modes.map((item) => <option key={item} value={item}>{item === "date" ? "تاریخ‌دار - Active" : item === "on_hold" ? "شروع با اولین اتصال - On Hold" : "بدون محدودیت زمانی - Active"}</option>)}</select></label>
                 {mode !== "unlimited" && <label>مدت سرویس (روز)<input type="number" min="1" max="3650" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></label>}
               </div>
             </>

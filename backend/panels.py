@@ -252,6 +252,40 @@ async def set_user_status(panel: Panel, username: str, enabled: bool) -> str:
     return status_value
 
 
+async def update_user(
+    panel: Panel,
+    *,
+    username: str,
+    volume_gb: int,
+    duration_days: int,
+    time_mode: str,
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(
+        base_url=_api_base_url(panel),
+        verify=False,
+        timeout=httpx.Timeout(40, connect=15),
+    ) as client:
+        token = await _token(client, panel)
+        response = await client.put(
+            f"/api/user/{username}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "data_limit": volume_gb * 1024**3 if volume_gb > 0 else 0,
+                "data_limit_reset_strategy": "no_reset",
+                **_timing(time_mode, duration_days),
+            },
+        )
+        if response.status_code == 404:
+            raise PanelError("یوزرنیم کانفیگ در پنل سازنده پیدا نشد.")
+        if response.is_error:
+            raise _error(response, "ویرایش سرویس")
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 async def delete_user(panel: Panel, username: str) -> None:
     async with httpx.AsyncClient(
         base_url=_api_base_url(panel),

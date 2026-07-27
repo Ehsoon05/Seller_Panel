@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Seller, SellerLedger, SellerOffer, SellerService
-from .schemas import CreateServiceBody, LoginBody
+from .schemas import CreateServiceBody, LoginBody, ServiceUpdateBody
 from .security import (
     COOKIE_NAME,
     current_seller,
@@ -19,9 +19,11 @@ from .service import (
     dashboard,
     offer_out,
     refresh_service,
+    remove_service,
     seller_out,
     service_out,
     toggle_service,
+    update_service,
 )
 
 router = APIRouter(prefix="/api")
@@ -160,6 +162,36 @@ async def set_status(
         raise HTTPException(status_code=502, detail=str(exc) or "تغییر وضعیت انجام نشد.") from exc
 
 
+@router.patch("/services/{service_id}")
+async def edit_service(
+    service_id: int,
+    body: ServiceUpdateBody,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    try:
+        return service_out(await update_service(session, service, body))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "ویرایش سرویس انجام نشد.") from exc
+
+
+@router.delete("/services/{service_id}")
+async def remove_owned_service(
+    service_id: int,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    try:
+        await remove_service(session, service)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "حذف سرویس انجام نشد.") from exc
+    return {"deleted": True}
+
+
 @router.get("/ledger")
 async def ledger(
     seller: Seller = Depends(current_seller),
@@ -185,4 +217,3 @@ async def ledger(
         }
         for row in rows
     ]
-

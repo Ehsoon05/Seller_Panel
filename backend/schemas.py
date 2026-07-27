@@ -11,22 +11,34 @@ class LoginBody(BaseModel):
 class CreateServiceBody(BaseModel):
     request_id: str = Field(pattern=r"^[A-Za-z0-9-]{16,80}$")
     offer_id: int
+    panel_username: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_-]{3,120}$",
+    )
     display_name: str | None = Field(default=None, max_length=160)
     duration_days: int | None = Field(default=None, ge=0, le=3650)
     time_mode: str | None = None
+
+
+class ServiceUpdateBody(BaseModel):
+    volume_gb: int = Field(ge=0, le=100000)
+    duration_days: int = Field(ge=0, le=3650)
+    time_mode: str
 
 
 class SellerCreateBody(BaseModel):
     username: str = Field(pattern=r"^[A-Za-z0-9_.-]{3,80}$")
     display_name: str = Field(min_length=2, max_length=120)
     password: str = Field(min_length=8, max_length=128)
-    initial_balance: int = Field(default=0, ge=0)
+    initial_balance: int = 0
+    allow_negative_balance: bool = False
     is_active: bool = True
 
 
 class SellerUpdateBody(BaseModel):
     display_name: str | None = Field(default=None, min_length=2, max_length=120)
     password: str | None = Field(default=None, min_length=8, max_length=128)
+    allow_negative_balance: bool | None = None
     is_active: bool | None = None
 
 

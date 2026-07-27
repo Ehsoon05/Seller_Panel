@@ -3,6 +3,7 @@ export interface Seller {
   username: string;
   display_name: string;
   wallet_balance: number;
+  allow_negative_balance: boolean;
   is_active: boolean;
 }
 
@@ -56,4 +57,3 @@ export interface Ledger {
   service_id: number | null;
   created_at: string;
 }
-
