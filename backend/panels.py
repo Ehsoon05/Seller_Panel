@@ -143,7 +143,9 @@ async def _access_fields(
     grouped = panel.panel_type in {"easy", "pasarguard"}
     fields: dict[str, Any] = {}
     if grouped:
-        fields["group_ids"] = panel.group_ids or [1]
+        group_ids = panel.group_ids or ([] if panel.panel_type == "pasarguard" else [1])
+        if group_ids:
+            fields["group_ids"] = group_ids
         limit = hwid_limit if hwid_limit is not None else panel.hwid_limit
         if limit is not None and limit > 0:
             fields["hwid_limit"] = limit
@@ -175,6 +177,10 @@ async def _access_fields(
             ] if isinstance(items, list) else []
             if tags:
                 inbounds[str(protocol)] = tags
+    elif isinstance(payload, list):
+        tags = [str(item).strip() for item in payload if str(item).strip()]
+        if tags:
+            inbounds["vless"] = tags
     if not inbounds and not grouped:
         raise PanelError("هیچ اینباند فعالی پیدا نشد.")
     fields.update({"proxies": {key: {} for key in inbounds}, "inbounds": inbounds})
