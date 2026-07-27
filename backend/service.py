@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
@@ -220,10 +220,11 @@ async def create_service(
     seller: Seller,
     body: CreateServiceBody,
 ) -> SellerService:
+    seller_id = seller.id
     existing = (
         await session.execute(
             select(SellerService).where(
-                SellerService.seller_id == seller.id,
+                SellerService.seller_id == seller_id,
                 SellerService.request_id == body.request_id,
             )
         )
@@ -235,13 +236,14 @@ async def create_service(
         await session.execute(
             select(SellerOffer).where(
                 SellerOffer.id == body.offer_id,
-                SellerOffer.seller_id == seller.id,
+                SellerOffer.seller_id == seller_id,
                 SellerOffer.is_active.is_(True),
             )
         )
     ).scalar_one_or_none()
     if offer is None:
         raise HTTPException(status_code=404, detail="سرویس انتخاب‌شده در دسترس نیست.")
+    offer_price = int(offer.price_toman)
 
     modes = allowed_time_modes(offer)
     mode = body.time_mode or offer.default_time_mode
@@ -272,16 +274,16 @@ async def create_service(
             )
 
     balance_condition = (
-        Seller.id == seller.id
+        Seller.id == seller_id
         if seller.allow_negative_balance
-        else (Seller.id == seller.id) & (Seller.wallet_balance >= offer.price_toman)
+        else (Seller.id == seller_id) & (Seller.wallet_balance >= offer_price)
     )
     charged = (
         await session.execute(
             update(Seller)
             .where(balance_condition)
             .values(
-                wallet_balance=Seller.wallet_balance - offer.price_toman,
+                wallet_balance=Seller.wallet_balance - offer_price,
                 updated_at=datetime.now(timezone.utc),
             )
         )
@@ -289,16 +291,17 @@ async def create_service(
     if not charged:
         raise HTTPException(status_code=409, detail="موجودی پنل برای ساخت این سرویس کافی نیست.")
     await session.flush()
-    balance = await session.scalar(select(Seller.wallet_balance).where(Seller.id == seller.id))
+    balance = await session.scalar(select(Seller.wallet_balance).where(Seller.id == seller_id))
     purchase_ledger = SellerLedger(
-        seller_id=seller.id,
-        amount=-offer.price_toman,
+        seller_id=seller_id,
+        amount=-offer_price,
         balance_after=int(balance or 0),
         kind="purchase",
         description=f"رزرو ساخت {offer.title} برای {username}",
     )
     session.add(purchase_ledger)
     await session.commit()
+    charge_ledger_id = purchase_ledger.id
     await session.refresh(offer)
 
     try:
@@ -311,7 +314,12 @@ async def create_service(
             hwid_limit=offer.panel_hwid_limit,
         )
     except Exception as exc:
-        await _refund(session, seller.id, offer.price_toman, f"بازگشت وجه ساخت ناموفق {username}")
+        await _cancel_charge(
+            session,
+            seller_id,
+            offer_price,
+            charge_ledger_id,
+        )
         detail = str(exc) or "پنل سازنده ساخت سرویس را نپذیرفت."
         lowered = detail.casefold()
         if any(value in lowered for value in ("already exist", "duplicate", "exists")):
@@ -328,7 +336,7 @@ async def create_service(
     )
     service = SellerService(
         request_id=body.request_id,
-        seller_id=seller.id,
+        seller_id=seller_id,
         offer_id=offer.id,
         panel_key=panel.key,
         panel_username=str(payload.get("username") or username),
@@ -339,7 +347,7 @@ async def create_service(
         volume_gb=offer.volume_gb,
         duration_days=duration_days,
         time_mode=mode,
-        price_toman=offer.price_toman,
+        price_toman=offer_price,
         status=str(payload.get("status") or "active"),
         used_bytes=int(payload.get("used_traffic") or 0),
         data_limit_bytes=int(payload.get("data_limit") or 0),
@@ -359,33 +367,43 @@ async def create_service(
         try:
             await delete_user(panel, username)
         finally:
-            await _refund(session, seller.id, offer.price_toman, f"بازگشت وجه ثبت ناموفق {username}")
+            await _cancel_charge(
+                session,
+                seller_id,
+                offer_price,
+                charge_ledger_id,
+            )
         raise
     await session.refresh(seller)
     asyncio.create_task(notify_service_created(seller, offer, service))
     return service
 
 
-async def _refund(session: AsyncSession, seller_id: int, amount: int, description: str) -> None:
+async def _cancel_charge(
+    session: AsyncSession,
+    seller_id: int,
+    amount: int,
+    ledger_id: int,
+) -> None:
     await session.rollback()
-    await session.execute(
-        update(Seller)
-        .where(Seller.id == seller_id)
-        .values(
-            wallet_balance=Seller.wallet_balance + amount,
-            updated_at=datetime.now(timezone.utc),
+    removed = (
+        await session.execute(
+            delete(SellerLedger).where(
+                SellerLedger.id == ledger_id,
+                SellerLedger.seller_id == seller_id,
+                SellerLedger.kind == "purchase",
+            )
         )
-    )
-    balance = await session.scalar(select(Seller.wallet_balance).where(Seller.id == seller_id))
-    session.add(
-        SellerLedger(
-            seller_id=seller_id,
-            amount=amount,
-            balance_after=int(balance or 0),
-            kind="refund",
-            description=description,
+    ).rowcount
+    if removed:
+        await session.execute(
+            update(Seller)
+            .where(Seller.id == seller_id)
+            .values(
+                wallet_balance=Seller.wallet_balance + amount,
+                updated_at=datetime.now(timezone.utc),
+            )
         )
-    )
     await session.commit()
 
 

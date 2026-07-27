@@ -101,7 +101,7 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ledger), 1)
             self.assertEqual(ledger[0].amount, -100_000)
 
-    async def test_panel_failure_refunds_wallet(self) -> None:
+    async def test_panel_failure_cancels_charge_without_ledger_rows(self) -> None:
         body = CreateServiceBody(
             request_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             offer_id=self.offer_id,
@@ -122,7 +122,57 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             await session.refresh(seller)
             self.assertEqual(seller.wallet_balance, 500_000)
             values = list((await session.execute(select(SellerLedger))).scalars())
-            self.assertEqual([row.amount for row in values], [-100_000, 100_000])
+            self.assertEqual(values, [])
+            values = await dashboard(session, seller.id)
+            self.assertEqual(values["monthly_spend"], 0)
+
+    async def test_subscription_failure_removes_provisioned_user_and_charge(self) -> None:
+        payload = {
+            "username": "SyncFailureUser",
+            "status": "active",
+            "used_traffic": 0,
+            "data_limit": 20 * 1024**3,
+            "expire": 1_900_000_000,
+            "_subscription_url": "https://panel.example/sub/sync-failure",
+        }
+        body = CreateServiceBody(
+            request_id="sync-failure-00000000000001",
+            offer_id=self.offer_id,
+            panel_username="SyncFailureUser",
+            duration_days=30,
+            time_mode="date",
+        )
+        async with self.sessions() as session:
+            seller = await session.get(Seller, self.seller_id)
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(return_value={"status": "deleted"}),
+                ),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)),
+                patch(
+                    "backend.service.sync_subscription",
+                    AsyncMock(side_effect=RuntimeError("sync unavailable")),
+                ),
+                patch("backend.service.delete_user", AsyncMock()) as remove_provider_user,
+            ):
+                with self.assertRaises(RuntimeError):
+                    await create_service(session, seller, body)
+
+            remove_provider_user.assert_awaited_once_with(self.panel, "SyncFailureUser")
+            await session.refresh(seller)
+            self.assertEqual(seller.wallet_balance, 500_000)
+            self.assertEqual(
+                list((await session.execute(select(SellerLedger))).scalars()),
+                [],
+            )
+            self.assertEqual(
+                list((await session.execute(select(SellerService))).scalars()),
+                [],
+            )
+            values = await dashboard(session, seller.id)
+            self.assertEqual(values["monthly_spend"], 0)
 
     async def test_dashboard_reads_cached_values_only(self) -> None:
         async with self.sessions() as session:
