@@ -36,6 +36,10 @@ class SellerCreateBody(BaseModel):
 
 
 class SellerUpdateBody(BaseModel):
+    username: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_.-]{3,80}$",
+    )
     display_name: str | None = Field(default=None, min_length=2, max_length=120)
     password: str | None = Field(default=None, min_length=8, max_length=128)
     allow_negative_balance: bool | None = None
@@ -56,7 +60,8 @@ class OfferBody(BaseModel):
     default_duration_days: int = Field(default=30, ge=0, le=3650)
     allowed_time_modes: list[str] = Field(default_factory=lambda: ["date"])
     default_time_mode: str = "date"
-    lock_time: bool = False
+    lock_time_mode: bool = False
+    lock_duration: bool = False
     name_prefix: str = Field(default="PhantomSeller_1", min_length=1, max_length=120)
     panel_hwid_limit: int | None = Field(default=None, ge=0, le=1000)
     subscription_device_limit: int = Field(default=0, ge=0, le=1000)

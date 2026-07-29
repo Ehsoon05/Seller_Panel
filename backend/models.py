@@ -46,6 +46,8 @@ class SellerOffer(Base):
     allowed_time_modes_json: Mapped[str] = mapped_column(Text, default='["date"]')
     default_time_mode: Mapped[str] = mapped_column(String(20), default="date")
     lock_time: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_time_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_duration: Mapped[bool] = mapped_column(Boolean, default=False)
     name_prefix: Mapped[str] = mapped_column(String(120), default="PhantomSeller_1")
     next_sequence: Mapped[int] = mapped_column(Integer, default=1)
     panel_hwid_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)

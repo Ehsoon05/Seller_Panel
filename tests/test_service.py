@@ -280,7 +280,8 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         async with self.sessions() as session:
             offer = await session.get(SellerOffer, self.offer_id)
-            offer.lock_time = True
+            offer.lock_time_mode = True
+            offer.lock_duration = True
             await session.commit()
             seller = await session.get(Seller, self.seller_id)
             with (
@@ -299,6 +300,77 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(service.time_mode, "date")
             self.assertEqual(provision.await_args.kwargs["duration_days"], 30)
             self.assertEqual(provision.await_args.kwargs["time_mode"], "date")
+
+    async def test_time_mode_and_duration_locks_are_independent(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.lock_time_mode = True
+            offer.lock_duration = False
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+            payload = {
+                "username": "ModeLocked",
+                "status": "active",
+                "used_traffic": 0,
+                "data_limit": 20 * 1024**3,
+                "expire": 1_900_000_000,
+                "_subscription_url": "https://panel.example/sub/mode-locked",
+            }
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.fetch_user", AsyncMock(return_value={"status": "deleted"})),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)),
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                service = await create_service(
+                    session,
+                    seller,
+                    CreateServiceBody(
+                        request_id="mode-locked-000000000000001",
+                        offer_id=self.offer_id,
+                        panel_username="ModeLocked",
+                        duration_days=7,
+                        time_mode="on_hold",
+                    ),
+                )
+            self.assertEqual(service.time_mode, "date")
+            self.assertEqual(service.duration_days, 7)
+
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.lock_time_mode = False
+            offer.lock_duration = True
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+            payload = {
+                "username": "DurationLocked",
+                "status": "on_hold",
+                "used_traffic": 0,
+                "data_limit": 20 * 1024**3,
+                "expire": 0,
+                "_subscription_url": "https://panel.example/sub/duration-locked",
+            }
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.fetch_user", AsyncMock(return_value={"status": "deleted"})),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)),
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                service = await create_service(
+                    session,
+                    seller,
+                    CreateServiceBody(
+                        request_id="duration-locked-00000000001",
+                        offer_id=self.offer_id,
+                        panel_username="DurationLocked",
+                        duration_days=7,
+                        time_mode="on_hold",
+                    ),
+                )
+            self.assertEqual(service.time_mode, "on_hold")
+            self.assertEqual(service.duration_days, 30)
 
     async def test_locked_volume_cannot_be_changed_after_creation(self) -> None:
         async with self.sessions() as session:

@@ -121,6 +121,17 @@ async def update_seller(
     seller = await session.get(Seller, seller_id)
     if seller is None:
         raise HTTPException(status_code=404, detail="همکار پیدا نشد.")
+    if body.username is not None:
+        username = body.username.strip().casefold()
+        duplicate = await session.scalar(
+            select(Seller.id).where(
+                Seller.username == username,
+                Seller.id != seller.id,
+            )
+        )
+        if duplicate:
+            raise HTTPException(status_code=409, detail="این نام کاربری قبلاً ثبت شده است.")
+        seller.username = username
     if body.display_name is not None:
         seller.display_name = body.display_name.strip()
     if body.password is not None:
@@ -192,7 +203,9 @@ def _apply_offer(offer: SellerOffer, body: OfferBody) -> None:
         if body.default_time_mode in body.allowed_time_modes
         else body.allowed_time_modes[0]
     )
-    offer.lock_time = body.lock_time
+    offer.lock_time_mode = body.lock_time_mode
+    offer.lock_duration = body.lock_duration
+    offer.lock_time = body.lock_time_mode and body.lock_duration
     offer.name_prefix = body.name_prefix.strip()
     offer.panel_hwid_limit = body.panel_hwid_limit
     offer.subscription_device_limit = body.subscription_device_limit

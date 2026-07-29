@@ -47,5 +47,31 @@ async def initialize_database() -> None:
                         "lock_time BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
+            if "lock_time_mode" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "lock_time_mode BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+                sync_connection.execute(
+                    text(
+                        "UPDATE seller_offers SET lock_time_mode = lock_time "
+                        "WHERE lock_time = 1"
+                    )
+                )
+            if "lock_duration" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "lock_duration BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+                sync_connection.execute(
+                    text(
+                        "UPDATE seller_offers SET lock_duration = lock_time "
+                        "WHERE lock_time = 1"
+                    )
+                )
 
         await connection.run_sync(migrate)

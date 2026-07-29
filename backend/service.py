@@ -81,6 +81,8 @@ def offer_out(offer: SellerOffer) -> dict:
         "allowed_time_modes": allowed_time_modes(offer),
         "default_time_mode": offer.default_time_mode,
         "lock_time": offer.lock_time,
+        "lock_time_mode": offer.lock_time_mode,
+        "lock_duration": offer.lock_duration,
         "name_prefix": offer.name_prefix,
         "panel_hwid_limit": offer.panel_hwid_limit,
         "subscription_device_limit": offer.subscription_device_limit,
@@ -248,12 +250,16 @@ async def create_service(
     offer_price = int(offer.price_toman)
 
     modes = allowed_time_modes(offer)
-    mode = offer.default_time_mode if offer.lock_time else (body.time_mode or offer.default_time_mode)
+    mode = (
+        offer.default_time_mode
+        if offer.lock_time_mode
+        else (body.time_mode or offer.default_time_mode)
+    )
     if mode not in modes:
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     duration_days = (
         int(offer.default_duration_days)
-        if offer.lock_time
+        if offer.lock_duration
         else (
             int(body.duration_days)
             if body.duration_days is not None
@@ -452,13 +458,25 @@ async def update_service(
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     if offer.lock_volume and body.volume_gb != service.volume_gb:
         raise HTTPException(status_code=403, detail="حجم این سرویس توسط مدیریت قفل شده است.")
-    if offer.lock_time and (
-        body.time_mode != service.time_mode or body.duration_days != service.duration_days
+    if offer.lock_time_mode and body.time_mode != service.time_mode:
+        raise HTTPException(status_code=403, detail="نوع تاریخ این سرویس توسط مدیریت قفل شده است.")
+    if (
+        offer.lock_duration
+        and body.time_mode != "unlimited"
+        and body.duration_days != offer.default_duration_days
     ):
-        raise HTTPException(status_code=403, detail="زمان این سرویس توسط مدیریت قفل شده است.")
+        raise HTTPException(status_code=403, detail="مدت این سرویس توسط مدیریت قفل شده است.")
     if body.time_mode != "unlimited" and body.duration_days <= 0:
         raise HTTPException(status_code=400, detail="مدت سرویس باید بیشتر از صفر باشد.")
-    duration_days = 0 if body.time_mode == "unlimited" else body.duration_days
+    duration_days = (
+        0
+        if body.time_mode == "unlimited"
+        else (
+            int(offer.default_duration_days)
+            if offer.lock_duration
+            else body.duration_days
+        )
+    )
     panel = get_panel(service.panel_key)
     payload = await update_user(
         panel,

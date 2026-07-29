@@ -26,6 +26,8 @@ export interface Offer {
   allowed_time_modes: string[];
   default_time_mode: string;
   lock_time: boolean;
+  lock_time_mode: boolean;
+  lock_duration: boolean;
   subscription_device_limit: number;
 }
 
