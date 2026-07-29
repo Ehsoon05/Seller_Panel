@@ -18,10 +18,10 @@
 }
 
 * { box-sizing: border-box; }
-html { background: var(--bg); }
+html { background: var(--bg); -webkit-text-size-adjust: 100%; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input, select { font: inherit; }
-button, a { -webkit-tap-highlight-color: transparent; }
+button, input, select, textarea { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 a { color: inherit; text-decoration: none; }
 h1, h2, p { margin-top: 0; }
 button { color: inherit; }
@@ -304,6 +304,10 @@ tbody tr:hover { background: rgba(255,255,255,.015); }
 }
 
 @media (max-width: 760px) {
+  input, select, textarea {
+    font-size: 16px;
+    line-height: 1.35;
+  }
   .mobile-header {
     position: sticky;
     top: 0;
