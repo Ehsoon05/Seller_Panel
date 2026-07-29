@@ -11,9 +11,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.database import Base
 from backend.models import Seller, SellerLedger, SellerOffer, SellerService
 from backend.panels import Panel, PanelError
-from backend.schemas import CreateServiceBody, ServiceUpdateBody
+from backend.schemas import CreateServiceBody, ServiceRenewBody, ServiceUpdateBody
 from backend.security import hash_password
-from backend.service import create_service, dashboard, remove_service, update_service
+from backend.service import (
+    create_service,
+    dashboard,
+    remove_service,
+    renew_service,
+    update_service,
+)
 
 
 class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -529,6 +535,159 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated.volume_gb, 50)
             self.assertEqual(updated.duration_days, 45)
             self.assertEqual(updated.data_limit_bytes, 50 * 1024**3)
+
+    async def test_per_gb_volume_increase_charges_only_difference(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 2_500
+            service = SellerService(
+                request_id="resize-service-0000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="ResizeMe",
+                upstream_url="https://panel.example/sub/resize",
+                public_token="resize-token",
+                public_url="https://api.example/token/resize-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=50_000,
+                used_bytes=5 * 1024**3,
+                data_limit_bytes=20 * 1024**3,
+            )
+            session.add(service)
+            await session.commit()
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.update_user",
+                    AsyncMock(return_value={"data_limit": 30 * 1024**3}),
+                ) as provider_update,
+                patch("backend.service.sync_subscription", AsyncMock()),
+            ):
+                updated = await update_service(
+                    session,
+                    service,
+                    ServiceUpdateBody(volume_gb=30, duration_days=30, time_mode="date"),
+                )
+
+            seller = await session.get(Seller, self.seller_id)
+            self.assertEqual(seller.wallet_balance, 475_000)
+            self.assertEqual(updated.volume_gb, 30)
+            self.assertEqual(updated.price_toman, 75_000)
+            self.assertFalse(provider_update.await_args.kwargs["update_timing"])
+            ledgers = list((await session.execute(select(SellerLedger))).scalars())
+            self.assertEqual(len(ledgers), 1)
+            self.assertEqual(ledgers[0].amount, -25_000)
+            self.assertEqual(ledgers[0].kind, "volume_adjustment")
+
+    async def test_volume_cannot_be_reduced_below_consumed_traffic(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 2_500
+            service = SellerService(
+                request_id="reduce-service-0000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="ReduceMe",
+                upstream_url="https://panel.example/sub/reduce",
+                public_token="reduce-token",
+                public_url="https://api.example/token/reduce-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=50_000,
+                used_bytes=15 * 1024**3,
+                data_limit_bytes=20 * 1024**3,
+            )
+            session.add(service)
+            await session.commit()
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(return_value={"used_traffic": 15 * 1024**3}),
+                ),
+                patch("backend.service.update_user", AsyncMock()) as provider_update,
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await update_service(
+                        session,
+                        service,
+                        ServiceUpdateBody(volume_gb=10, duration_days=30, time_mode="date"),
+                    )
+
+            self.assertEqual(raised.exception.status_code, 409)
+            provider_update.assert_not_awaited()
+            seller = await session.get(Seller, self.seller_id)
+            self.assertEqual(seller.wallet_balance, 500_000)
+
+    async def test_renewal_charges_resets_usage_and_is_idempotent(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 2_500
+            service = SellerService(
+                request_id="renew-service-00000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="RenewMe",
+                upstream_url="https://panel.example/sub/renew",
+                public_token="renew-token",
+                public_url="https://api.example/token/renew-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=50_000,
+                used_bytes=19 * 1024**3,
+                data_limit_bytes=20 * 1024**3,
+            )
+            session.add(service)
+            await session.commit()
+            body = ServiceRenewBody(request_id="renew-operation-000000000001")
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.update_user", AsyncMock(return_value={})),
+                patch(
+                    "backend.service.reset_user_traffic",
+                    AsyncMock(
+                        return_value={
+                            "status": "active",
+                            "used_traffic": 0,
+                            "data_limit": 20 * 1024**3,
+                            "expire": 1_950_000_000,
+                        }
+                    ),
+                ) as reset_traffic,
+                patch(
+                    "backend.service.fetch_user",
+                    AsyncMock(
+                        return_value={
+                            "status": "active",
+                            "used_traffic": 0,
+                            "data_limit": 20 * 1024**3,
+                            "expire": 1_950_000_000,
+                        }
+                    ),
+                ),
+            ):
+                renewed = await renew_service(session, service, body)
+                repeated = await renew_service(session, service, body)
+
+            self.assertEqual(renewed.id, repeated.id)
+            self.assertEqual(reset_traffic.await_count, 1)
+            self.assertEqual(renewed.used_bytes, 0)
+            seller = await session.get(Seller, self.seller_id)
+            self.assertEqual(seller.wallet_balance, 450_000)
+            ledgers = list((await session.execute(select(SellerLedger))).scalars())
+            self.assertEqual(len(ledgers), 1)
+            self.assertEqual(ledgers[0].kind, "renewal")
+            self.assertEqual(ledgers[0].amount, -50_000)
 
 
 if __name__ == "__main__":

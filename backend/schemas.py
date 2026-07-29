@@ -27,6 +27,10 @@ class ServiceUpdateBody(BaseModel):
     time_mode: str
 
 
+class ServiceRenewBody(BaseModel):
+    request_id: str = Field(pattern=r"^[A-Za-z0-9-]{16,80}$")
+
+
 class SellerCreateBody(BaseModel):
     username: str = Field(pattern=r"^[A-Za-z0-9_.-]{3,80}$")
     display_name: str = Field(min_length=2, max_length=120)

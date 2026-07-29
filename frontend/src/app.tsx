@@ -14,6 +14,7 @@ import {
   Pencil,
   Power,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Trash2,
@@ -24,7 +25,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { api, ApiError, bytes, date, relativeDays, statusLabel, toman } from "./lib";
-import type { Dashboard, Ledger, Offer, Seller, Service } from "./types";
+import type { Dashboard, Ledger, Offer, RenewalQuote, Seller, Service } from "./types";
 
 function Button({
   children,
@@ -105,7 +106,7 @@ function Login({ onLogin }: { onLogin: (seller: Seller) => void }) {
   );
 }
 
-function Shell({ seller, onLogout }: { seller: Seller; onLogout: () => void }) {
+function Shell({ seller, onLogout, onSellerRefresh }: { seller: Seller; onLogout: () => void; onSellerRefresh: () => Promise<void> }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
   useEffect(() => setMenuOpen(false), [location.pathname]);
@@ -144,7 +145,7 @@ function Shell({ seller, onLogout }: { seller: Seller; onLogout: () => void }) {
       <section className="workspace">
         <Routes>
           <Route index element={<DashboardPage />} />
-          <Route path="services" element={<ServicesPage />} />
+          <Route path="services" element={<ServicesPage onSellerRefresh={onSellerRefresh} />} />
           <Route path="create" element={<CreatePage />} />
           <Route path="ledger" element={<LedgerPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -220,6 +221,7 @@ function ServiceTable({
   onRefresh,
   onToggle,
   onEdit,
+  onRenew,
   onDelete,
   busyId,
   notify,
@@ -229,6 +231,7 @@ function ServiceTable({
   onRefresh?: (service: Service) => void;
   onToggle?: (service: Service) => void;
   onEdit?: (service: Service) => void;
+  onRenew?: (service: Service) => void;
   onDelete?: (service: Service) => void;
   busyId?: number | null;
   notify?: (message: string) => void;
@@ -260,13 +263,14 @@ function ServiceTable({
               {!compact && (
                 <td data-label="عملیات">
                   <div className="row-actions">
-                    <button className="icon-button" onClick={() => copy(service.public_url)} title="کپی لینک"><Copy size={17} /></button>
-                    <button className="icon-button" onClick={() => onRefresh?.(service)} disabled={busyId === service.id} title="به‌روزرسانی">
+                    <button className="icon-button has-tooltip" onClick={() => copy(service.public_url)} aria-label="کپی لینک" data-tooltip="کپی لینک"><Copy size={17} /></button>
+                    <button className="icon-button has-tooltip" onClick={() => onRefresh?.(service)} disabled={busyId === service.id} aria-label="به‌روزرسانی" data-tooltip="به‌روزرسانی">
                       <RefreshCw size={17} className={busyId === service.id ? "spin" : ""} />
                     </button>
-                    <button className={`icon-button ${service.status === "disabled" ? "enable" : "disable"}`} onClick={() => onToggle?.(service)} disabled={busyId === service.id} title={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"}><Power size={17} /></button>
-                    <button className="icon-button" onClick={() => onEdit?.(service)} disabled={busyId === service.id} title="ویرایش"><Pencil size={17} /></button>
-                    <button className="icon-button danger-icon" onClick={() => onDelete?.(service)} disabled={busyId === service.id} title="حذف کامل"><Trash2 size={17} /></button>
+                    <button className={`icon-button has-tooltip ${service.status === "disabled" ? "enable" : "disable"}`} onClick={() => onToggle?.(service)} disabled={busyId === service.id} aria-label={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"} data-tooltip={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"}><Power size={17} /></button>
+                    <button className="icon-button has-tooltip renew-icon" onClick={() => onRenew?.(service)} disabled={busyId === service.id} aria-label="تمدید" data-tooltip="تمدید"><RotateCcw size={17} /></button>
+                    <button className="icon-button has-tooltip" onClick={() => onEdit?.(service)} disabled={busyId === service.id} aria-label="ویرایش" data-tooltip="ویرایش"><Pencil size={17} /></button>
+                    <button className="icon-button has-tooltip danger-icon" onClick={() => onDelete?.(service)} disabled={busyId === service.id} aria-label="حذف کامل" data-tooltip="حذف کامل"><Trash2 size={17} /></button>
                   </div>
                 </td>
               )}
@@ -278,12 +282,14 @@ function ServiceTable({
   );
 }
 
-function ServicesPage() {
+function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void> }) {
   const [services, setServices] = useState<Service[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
   const [editing, setEditing] = useState<Service | null>(null);
+  const [renewing, setRenewing] = useState<Service | null>(null);
+  const [renewQuote, setRenewQuote] = useState<RenewalQuote | null>(null);
   const [editForm, setEditForm] = useState({ volume_gb: 0, duration_days: 30, time_mode: "date" });
   const [toast, setToast] = useState<{ message: string; tone: "ok" | "error" } | null>(null);
   const load = useCallback(async () => {
@@ -317,6 +323,16 @@ function ServicesPage() {
   async function saveEdit(event: FormEvent) {
     event.preventDefault();
     if (!editing) return;
+    const volumeDifference = editForm.volume_gb - editing.volume_gb;
+    const priceDifference = editingOffer?.pricing_mode === "per_gb"
+      ? volumeDifference * editingOffer.price_per_gb_toman
+      : 0;
+    if (priceDifference !== 0) {
+      const message = priceDifference > 0
+        ? `برای افزایش حجم، ${toman(priceDifference)} از موجودی شما کسر می‌شود. ادامه می‌دهید؟`
+        : `با کاهش حجم، ${toman(Math.abs(priceDifference))} به موجودی شما برمی‌گردد. ادامه می‌دهید؟`;
+      if (!window.confirm(message)) return;
+    }
     setBusyId(editing.id);
     try {
       const updated = await api<Service>(`/services/${editing.id}`, {
@@ -327,10 +343,42 @@ function ServicesPage() {
         }),
       });
       setServices((items) => items.map((item) => item.id === updated.id ? updated : item));
+      await onSellerRefresh();
       setEditing(null);
       setToast({ message: "مشخصات یوزر روی پنل سازنده ویرایش شد.", tone: "ok" });
     } catch (reason) {
       setToast({ message: reason instanceof Error ? reason.message : "ویرایش انجام نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function openRenew(service: Service) {
+    setBusyId(service.id);
+    try {
+      const quote = await api<RenewalQuote>(`/services/${service.id}/renewal-quote`);
+      setRenewing(service);
+      setRenewQuote(quote);
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "اطلاعات تمدید دریافت نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function confirmRenew() {
+    if (!renewing || !renewQuote) return;
+    setBusyId(renewing.id);
+    try {
+      const updated = await api<Service>(`/services/${renewing.id}/renew`, {
+        method: "POST",
+        body: JSON.stringify({ request_id: crypto.randomUUID() }),
+      });
+      setServices((items) => items.map((item) => item.id === updated.id ? updated : item));
+      await onSellerRefresh();
+      setRenewing(null);
+      setRenewQuote(null);
+      setToast({ message: "سرویس با موفقیت تمدید شد؛ حجم و تاریخ از نو محاسبه شدند.", tone: "ok" });
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "تمدید انجام نشد.", tone: "error" });
     } finally {
       setBusyId(null);
     }
@@ -356,7 +404,7 @@ function ServicesPage() {
         <label className="search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجو با نام، یوزرنیم یا لینک..." /></label>
         <span>{services.length.toLocaleString("fa-IR")} سرویس</span>
       </div>
-      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} onEdit={openEdit} onDelete={(value) => void remove(value)} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
+      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} onEdit={openEdit} onRenew={(value) => void openRenew(value)} onDelete={(value) => void remove(value)} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
       {editing && (
         <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setEditing(null)}>
           <form className="edit-modal" onSubmit={saveEdit}>
@@ -365,7 +413,7 @@ function ServicesPage() {
               <button type="button" className="icon-button" onClick={() => setEditing(null)} aria-label="بستن"><X size={18} /></button>
             </div>
             <div className="form-grid">
-              {editingOffer?.lock_volume || editingOffer?.pricing_mode === "per_gb" ? <div className="locked-value"><strong>حجم خریداری‌شده</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، صفر نامحدود)<input type="number" min="0" max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
+              {editingOffer?.lock_volume ? <div className="locked-value"><strong>حجم خریداری‌شده</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، صفر نامحدود)<input type="number" min={editingOffer?.pricing_mode === "per_gb" ? 1 : 0} max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
               {editingOffer?.lock_time_mode ? <div className="locked-value"><strong>نوع تاریخ ثابت</strong><span>{editForm.time_mode === "unlimited" ? "بدون محدودیت زمانی" : editForm.time_mode === "on_hold" ? "شروع با اولین اتصال - On Hold" : "تاریخ‌دار - Active"}</span></div> : <label>نوع تاریخ
                 <select value={editForm.time_mode} onChange={(event) => setEditForm({ ...editForm, time_mode: event.target.value })}>
                   {(editingOffer?.allowed_time_modes || ["date", "on_hold", "unlimited"]).map((item) => (
@@ -377,12 +425,45 @@ function ServicesPage() {
                 ? <div className="locked-value"><strong>مدت ثابت</strong><span>{editingOffer.default_duration_days.toLocaleString("fa-IR")} روز</span></div>
                 : <label className="wide">مدت از اکنون (روز)<input type="number" min="1" max="3650" value={editForm.duration_days} onChange={(event) => setEditForm({ ...editForm, duration_days: Number(event.target.value) })} /></label>)}
             </div>
+            {editingOffer?.pricing_mode === "per_gb" && editForm.volume_gb !== editing.volume_gb && (
+              <div className={`price-adjustment ${editForm.volume_gb > editing.volume_gb ? "charge" : "refund"}`}>
+                <span>{editForm.volume_gb > editing.volume_gb ? "مبلغ قابل کسر" : "مبلغ قابل بازگشت"}</span>
+                <strong>{toman(Math.abs(editForm.volume_gb - editing.volume_gb) * editingOffer.price_per_gb_toman)}</strong>
+              </div>
+            )}
+            {editingOffer?.pricing_mode === "per_gb" && (
+              <p className="volume-rule">
+                حجم جدید نباید از مصرف فعلی کمتر باشد. اکنون {bytes(editing.used_bytes)} مصرف شده و حداکثر {bytes(editing.remaining_bytes)} قابل کاهش است.
+              </p>
+            )}
             <p className="edit-warning">ثبت ویرایش، حجم و تاریخ یوزر را روی پنل سازنده با همین مقادیر به‌روزرسانی می‌کند.</p>
             <div className="modal-actions">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>انصراف</Button>
               <Button type="submit" busy={busyId === editing.id}><Pencil size={17} /> ذخیره تغییرات</Button>
             </div>
           </form>
+        </div>
+      )}
+      {renewing && renewQuote && (
+        <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setRenewing(null)}>
+          <section className="edit-modal renewal-modal">
+            <div className="modal-head">
+              <div><h2>تأیید تمدید سرویس</h2><p>{renewing.panel_username}</p></div>
+              <button type="button" className="icon-button" onClick={() => setRenewing(null)} aria-label="بستن"><X size={18} /></button>
+            </div>
+            <div className="renewal-summary">
+              <div><span>حجم پس از تمدید</span><strong>{renewQuote.volume_gb ? `${renewQuote.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</strong></div>
+              <div><span>مدت جدید</span><strong>{renewQuote.duration_days ? `${renewQuote.duration_days.toLocaleString("fa-IR")} روز` : "نامحدود"}</strong></div>
+              <div><span>هزینه تمدید</span><strong>{toman(renewQuote.price_toman)}</strong></div>
+              <div><span>موجودی فعلی</span><strong>{toman(renewQuote.wallet_balance)}</strong></div>
+            </div>
+            <p className="edit-warning">با تأیید، مصرف حجم صفر می‌شود و تاریخ سرویس از ابتدا محاسبه خواهد شد.</p>
+            {!renewQuote.can_afford && <p className="form-error">موجودی شما برای تمدید این سرویس کافی نیست.</p>}
+            <div className="modal-actions">
+              <Button type="button" variant="ghost" onClick={() => setRenewing(null)}>انصراف</Button>
+              <Button type="button" busy={busyId === renewing.id} disabled={!renewQuote.can_afford} onClick={() => void confirmRenew()}><RotateCcw size={17} /> تأیید و پرداخت</Button>
+            </div>
+          </section>
         </div>
       )}
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
@@ -498,7 +579,7 @@ function LedgerPage() {
         <table>
           <thead><tr><th>شرح</th><th>نوع</th><th>مبلغ</th><th>موجودی پس از تراکنش</th><th>تاریخ</th></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id}><td data-label="شرح"><strong>{row.description}</strong></td><td data-label="نوع"><span className={`ledger-kind ${row.amount >= 0 ? "positive" : "negative"}`}>{row.kind === "purchase" ? "خرید" : row.kind === "refund" ? "بازگشت وجه" : row.amount >= 0 ? "افزایش" : "کاهش"}</span></td><td data-label="مبلغ" className={row.amount >= 0 ? "money positive" : "money negative"}>{row.amount >= 0 ? "+" : ""}{toman(row.amount)}</td><td data-label="موجودی">{toman(row.balance_after)}</td><td data-label="تاریخ"><small>{date(row.created_at)}</small></td></tr>)}
+            {rows.map((row) => <tr key={row.id}><td data-label="شرح"><strong>{row.description}</strong></td><td data-label="نوع"><span className={`ledger-kind ${row.amount >= 0 ? "positive" : "negative"}`}>{row.kind === "purchase" ? "خرید" : row.kind === "renewal" ? "تمدید" : row.kind === "volume_adjustment" ? "تغییر حجم" : row.kind === "refund" ? "بازگشت وجه" : row.amount >= 0 ? "افزایش" : "کاهش"}</span></td><td data-label="مبلغ" className={row.amount >= 0 ? "money positive" : "money negative"}>{row.amount >= 0 ? "+" : ""}{toman(row.amount)}</td><td data-label="موجودی">{toman(row.balance_after)}</td><td data-label="تاریخ"><small>{date(row.created_at)}</small></td></tr>)}
           </tbody>
         </table>
         {!rows.length && <div className="empty"><Clipboard size={30} /><strong>گردش حساب خالی است</strong></div>}
@@ -519,7 +600,10 @@ export function App() {
     await api("/auth/logout", { method: "POST" });
     setSeller(null);
   }
+  async function refreshSeller() {
+    setSeller(await api<Seller>("/me"));
+  }
   if (seller === undefined) return <div className="boot"><LoaderCircle className="spin" /><span>در حال آماده‌سازی پنل...</span></div>;
   if (!seller) return <Login onLogin={setSeller} />;
-  return <Shell seller={seller} onLogout={logout} />;
+  return <Shell seller={seller} onLogout={logout} onSellerRefresh={refreshSeller} />;
 }

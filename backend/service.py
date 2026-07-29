@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
@@ -22,10 +23,11 @@ from .panels import (
     delete_user,
     fetch_user,
     get_panel,
+    reset_user_traffic,
     set_user_status,
     update_user,
 )
-from .schemas import CreateServiceBody, ServiceUpdateBody
+from .schemas import CreateServiceBody, ServiceRenewBody, ServiceUpdateBody
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +123,21 @@ def service_out(service: SellerService) -> dict:
         "online_at": service.online_at,
         "last_refreshed_at": service.last_refreshed_at,
         "created_at": service.created_at,
+    }
+
+
+def renewal_quote(service: SellerService, offer: SellerOffer) -> dict:
+    price = (
+        int(offer.price_per_gb_toman) * int(service.volume_gb)
+        if offer.pricing_mode == "per_gb"
+        else int(offer.price_toman)
+    )
+    return {
+        "service_id": service.id,
+        "price_toman": price,
+        "volume_gb": service.volume_gb,
+        "duration_days": service.duration_days,
+        "time_mode": service.time_mode,
     }
 
 
@@ -418,7 +435,6 @@ async def _cancel_charge(
             delete(SellerLedger).where(
                 SellerLedger.id == ledger_id,
                 SellerLedger.seller_id == seller_id,
-                SellerLedger.kind == "purchase",
             )
         )
     ).rowcount
@@ -473,10 +489,10 @@ async def update_service(
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     if offer.lock_volume and body.volume_gb != service.volume_gb:
         raise HTTPException(status_code=403, detail="حجم این سرویس توسط مدیریت قفل شده است.")
-    if offer.pricing_mode == "per_gb" and body.volume_gb != service.volume_gb:
+    if offer.pricing_mode == "per_gb" and body.volume_gb <= 0:
         raise HTTPException(
-            status_code=403,
-            detail="حجم سرویس گیگی پس از خرید قابل تغییر نیست؛ سرویس جدید بسازید.",
+            status_code=400,
+            detail="حجم سرویس گیگی باید بیشتر از صفر باشد.",
         )
     if offer.lock_time_mode and body.time_mode != service.time_mode:
         raise HTTPException(status_code=403, detail="نوع تاریخ این سرویس توسط مدیریت قفل شده است.")
@@ -498,13 +514,88 @@ async def update_service(
         )
     )
     panel = get_panel(service.panel_key)
-    payload = await update_user(
-        panel,
-        username=service.panel_username,
-        volume_gb=body.volume_gb,
-        duration_days=duration_days,
-        time_mode=body.time_mode,
+    seller = await session.get(Seller, service.seller_id)
+    if seller is None:
+        raise HTTPException(status_code=404, detail="حساب همکار پیدا نشد.")
+    old_volume = int(service.volume_gb)
+    old_duration = int(service.duration_days)
+    old_mode = service.time_mode
+    old_expires_at = service.expires_at
+    timing_changed = duration_days != old_duration or body.time_mode != old_mode
+    volume_delta = int(body.volume_gb) - old_volume
+    price_delta = (
+        volume_delta * int(offer.price_per_gb_toman)
+        if offer.pricing_mode == "per_gb"
+        else 0
     )
+
+    if volume_delta < 0:
+        current = await fetch_user(panel, service.panel_username)
+        used_bytes = max(0, int(current.get("used_traffic") or service.used_bytes or 0))
+        new_limit = int(body.volume_gb) * 1024**3
+        if used_bytes > new_limit:
+            used_gb = used_bytes / 1024**3
+            reducible_gb = max(0, old_volume - used_gb)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"کاهش این مقدار ممکن نیست. مصرف فعلی {used_gb:.2f} گیگ است و "
+                    f"حداکثر {reducible_gb:.2f} گیگ می‌توانید کم کنید."
+                ),
+            )
+        service.used_bytes = used_bytes
+
+    charge_ledger: SellerLedger | None = None
+    if price_delta > 0:
+        balance_condition = (
+            Seller.id == seller.id
+            if seller.allow_negative_balance
+            else (Seller.id == seller.id) & (Seller.wallet_balance >= price_delta)
+        )
+        charged = (
+            await session.execute(
+                update(Seller)
+                .where(balance_condition)
+                .values(
+                    wallet_balance=Seller.wallet_balance - price_delta,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+        ).rowcount
+        if not charged:
+            raise HTTPException(
+                status_code=409,
+                detail=f"برای افزایش حجم، {price_delta:,} تومان موجودی لازم است.",
+            )
+        await session.flush()
+        balance = await session.scalar(
+            select(Seller.wallet_balance).where(Seller.id == seller.id)
+        )
+        charge_ledger = SellerLedger(
+            seller_id=seller.id,
+            amount=-price_delta,
+            balance_after=int(balance or 0),
+            kind="volume_adjustment",
+            description=f"افزایش حجم {service.panel_username} به {body.volume_gb} گیگ",
+            service_id=service.id,
+        )
+        session.add(charge_ledger)
+        await session.commit()
+
+    try:
+        payload = await update_user(
+            panel,
+            username=service.panel_username,
+            volume_gb=body.volume_gb,
+            duration_days=duration_days,
+            time_mode=body.time_mode,
+            update_timing=timing_changed,
+        )
+    except Exception:
+        if charge_ledger is not None:
+            await _cancel_charge(session, seller.id, price_delta, charge_ledger.id)
+        raise
+
     service.volume_gb = body.volume_gb
     service.duration_days = duration_days
     service.time_mode = body.time_mode
@@ -522,14 +613,160 @@ async def update_service(
         _timestamp(payload.get("expire"))
         if payload.get("expire") is not None
         else (
-            None
-            if duration_days == 0 or body.time_mode == "on_hold"
-            else datetime.now(timezone.utc) + timedelta(days=duration_days)
+            old_expires_at
+            if not timing_changed
+            else (
+                None
+                if duration_days == 0 or body.time_mode == "on_hold"
+                else datetime.now(timezone.utc) + timedelta(days=duration_days)
+            )
         )
     )
     service.last_refreshed_at = datetime.now(timezone.utc)
-    await sync_subscription(service, offer)
-    await session.commit()
+    try:
+        await sync_subscription(service, offer)
+        if price_delta < 0:
+            refund = abs(price_delta)
+            await session.execute(
+                update(Seller)
+                .where(Seller.id == seller.id)
+                .values(
+                    wallet_balance=Seller.wallet_balance + refund,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.flush()
+            balance = await session.scalar(
+                select(Seller.wallet_balance).where(Seller.id == seller.id)
+            )
+            session.add(
+                SellerLedger(
+                    seller_id=seller.id,
+                    amount=refund,
+                    balance_after=int(balance or 0),
+                    kind="volume_adjustment",
+                    description=f"کاهش حجم {service.panel_username} به {body.volume_gb} گیگ",
+                    service_id=service.id,
+                )
+            )
+        if offer.pricing_mode == "per_gb":
+            service.price_toman = int(offer.price_per_gb_toman) * int(body.volume_gb)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        try:
+            await update_user(
+                panel,
+                username=service.panel_username,
+                volume_gb=old_volume,
+                duration_days=old_duration,
+                time_mode=old_mode,
+                update_timing=timing_changed,
+            )
+        finally:
+            if charge_ledger is not None:
+                await _cancel_charge(session, seller.id, price_delta, charge_ledger.id)
+        raise
+    await session.refresh(service)
+    return service
+
+
+async def renew_service(
+    session: AsyncSession,
+    service: SellerService,
+    body: ServiceRenewBody,
+) -> SellerService:
+    existing_operation = await session.scalar(
+        select(SellerLedger.id).where(
+            SellerLedger.seller_id == service.seller_id,
+            SellerLedger.operation_id == body.request_id,
+            SellerLedger.kind == "renewal",
+        )
+    )
+    if existing_operation is not None:
+        return service
+    offer = await session.get(SellerOffer, service.offer_id)
+    seller = await session.get(Seller, service.seller_id)
+    if offer is None or seller is None:
+        raise HTTPException(status_code=409, detail="پلن یا حساب همکار این سرویس پیدا نشد.")
+    quote = renewal_quote(service, offer)
+    price = int(quote["price_toman"])
+    balance_condition = (
+        Seller.id == seller.id
+        if seller.allow_negative_balance
+        else (Seller.id == seller.id) & (Seller.wallet_balance >= price)
+    )
+    charged = (
+        await session.execute(
+            update(Seller)
+            .where(balance_condition)
+            .values(
+                wallet_balance=Seller.wallet_balance - price,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+    ).rowcount
+    if not charged:
+        raise HTTPException(
+            status_code=409,
+            detail=f"برای تمدید این سرویس، {price:,} تومان موجودی لازم است.",
+        )
+    await session.flush()
+    balance = await session.scalar(
+        select(Seller.wallet_balance).where(Seller.id == seller.id)
+    )
+    ledger = SellerLedger(
+        seller_id=seller.id,
+        amount=-price,
+        balance_after=int(balance or 0),
+        kind="renewal",
+        description=f"تمدید سرویس {service.panel_username}",
+        service_id=service.id,
+        operation_id=body.request_id,
+    )
+    session.add(ledger)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return service
+
+    panel = get_panel(service.panel_key)
+    try:
+        await reset_user_traffic(panel, service.panel_username)
+        await update_user(
+            panel,
+            username=service.panel_username,
+            volume_gb=service.volume_gb,
+            duration_days=service.duration_days,
+            time_mode=service.time_mode,
+        )
+        payload = await fetch_user(panel, service.panel_username)
+        service.status = str(
+            payload.get("status")
+            or ("on_hold" if service.time_mode == "on_hold" else "active")
+        )
+        service.used_bytes = int(payload.get("used_traffic") or 0)
+        service.data_limit_bytes = int(
+            payload.get("data_limit")
+            if payload.get("data_limit") is not None
+            else service.volume_gb * 1024**3
+        )
+        service.expires_at = (
+            _timestamp(payload.get("expire"))
+            if payload.get("expire") is not None
+            else (
+                None
+                if service.duration_days == 0 or service.time_mode == "on_hold"
+                else datetime.now(timezone.utc) + timedelta(days=service.duration_days)
+            )
+        )
+        service.last_refreshed_at = datetime.now(timezone.utc)
+        service.price_toman = price
+        await session.commit()
+    except Exception:
+        await _cancel_charge(session, seller.id, price, ledger.id)
+        raise
     await session.refresh(service)
     return service
 

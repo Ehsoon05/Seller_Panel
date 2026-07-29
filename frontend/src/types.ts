@@ -54,6 +54,16 @@ export interface Service {
   created_at: string;
 }
 
+export interface RenewalQuote {
+  service_id: number;
+  price_toman: number;
+  volume_gb: number;
+  duration_days: number;
+  time_mode: string;
+  wallet_balance: number;
+  can_afford: boolean;
+}
+
 export interface Ledger {
   id: number;
   amount: number;

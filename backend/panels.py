@@ -267,6 +267,7 @@ async def update_user(
     volume_gb: int,
     duration_days: int,
     time_mode: str,
+    update_timing: bool = True,
 ) -> dict[str, Any]:
     async with httpx.AsyncClient(
         base_url=_api_base_url(panel),
@@ -280,7 +281,7 @@ async def update_user(
             json={
                 "data_limit": volume_gb * 1024**3 if volume_gb > 0 else 0,
                 "data_limit_reset_strategy": "no_reset",
-                **_timing(time_mode, duration_days),
+                **(_timing(time_mode, duration_days) if update_timing else {}),
             },
         )
         if response.status_code == 404:
@@ -291,6 +292,30 @@ async def update_user(
             payload = response.json()
         except ValueError:
             payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+async def reset_user_traffic(panel: Panel, username: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(
+        base_url=_api_base_url(panel),
+        verify=False,
+        timeout=httpx.Timeout(40, connect=15),
+    ) as client:
+        token = await _token(client, panel)
+        headers = {"Authorization": f"Bearer {token}"}
+        response = await client.post(f"/api/user/{username}/reset", headers=headers)
+        if response.status_code in {404, 405}:
+            response = await client.put(
+                f"/api/user/{username}",
+                headers=headers,
+                json={"used_traffic": 0},
+            )
+        if response.is_error:
+            raise _error(response, "ریست حجم مصرفی سرویس")
+        refreshed = await client.get(f"/api/user/{username}", headers=headers)
+        if refreshed.is_error:
+            raise _error(refreshed, "دریافت وضعیت سرویس تمدیدشده")
+        payload = refreshed.json()
     return payload if isinstance(payload, dict) else {}
 
 

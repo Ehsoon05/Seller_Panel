@@ -105,4 +105,7 @@ class SellerLedger(Base):
     kind: Mapped[str] = mapped_column(String(30))
     description: Mapped[str] = mapped_column(String(300))
     service_id: Mapped[int | None] = mapped_column(ForeignKey("seller_services.id"), nullable=True)
+    operation_id: Mapped[str | None] = mapped_column(
+        String(80), unique=True, index=True, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

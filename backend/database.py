@@ -87,5 +87,18 @@ async def initialize_database() -> None:
                         "WHERE lock_time = 1"
                     )
                 )
+            ledger_columns = {
+                column["name"] for column in inspect(sync_connection).get_columns("seller_ledger")
+            }
+            if "operation_id" not in ledger_columns:
+                sync_connection.execute(
+                    text("ALTER TABLE seller_ledger ADD COLUMN operation_id VARCHAR(80)")
+                )
+                sync_connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "ix_seller_ledger_operation_id ON seller_ledger (operation_id)"
+                    )
+                )
 
         await connection.run_sync(migrate)

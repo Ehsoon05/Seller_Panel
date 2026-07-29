@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Seller, SellerLedger, SellerOffer, SellerService
-from .schemas import CreateServiceBody, LoginBody, ServiceUpdateBody
+from .schemas import CreateServiceBody, LoginBody, ServiceRenewBody, ServiceUpdateBody
 from .security import (
     COOKIE_NAME,
     current_seller,
@@ -20,6 +20,8 @@ from .service import (
     offer_out,
     refresh_service,
     remove_service,
+    renewal_quote,
+    renew_service,
     seller_out,
     service_out,
     toggle_service,
@@ -176,6 +178,41 @@ async def edit_service(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc) or "ویرایش سرویس انجام نشد.") from exc
+
+
+@router.get("/services/{service_id}/renewal-quote")
+async def get_renewal_quote(
+    service_id: int,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    offer = await session.get(SellerOffer, service.offer_id)
+    if offer is None:
+        raise HTTPException(status_code=409, detail="پلن تمدید این سرویس پیدا نشد.")
+    quote = renewal_quote(service, offer)
+    return {
+        **quote,
+        "wallet_balance": seller.wallet_balance,
+        "can_afford": seller.allow_negative_balance
+        or seller.wallet_balance >= quote["price_toman"],
+    }
+
+
+@router.post("/services/{service_id}/renew")
+async def renew_owned_service(
+    service_id: int,
+    body: ServiceRenewBody,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    try:
+        return service_out(await renew_service(session, service, body))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "تمدید سرویس انجام نشد.") from exc
 
 
 @router.delete("/services/{service_id}")
