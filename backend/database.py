@@ -33,6 +33,20 @@ async def initialize_database() -> None:
             offer_columns = {
                 column["name"] for column in inspect(sync_connection).get_columns("seller_offers")
             }
+            if "pricing_mode" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "pricing_mode VARCHAR(20) NOT NULL DEFAULT 'fixed'"
+                    )
+                )
+            if "price_per_gb_toman" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "price_per_gb_toman BIGINT NOT NULL DEFAULT 0"
+                    )
+                )
             if "lock_volume" not in offer_columns:
                 sync_connection.execute(
                     text(

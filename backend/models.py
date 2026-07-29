@@ -40,6 +40,8 @@ class SellerOffer(Base):
     title: Mapped[str] = mapped_column(String(140))
     panel_key: Mapped[str] = mapped_column(String(80), index=True)
     price_toman: Mapped[int] = mapped_column(BigInteger)
+    pricing_mode: Mapped[str] = mapped_column(String(20), default="fixed")
+    price_per_gb_toman: Mapped[int] = mapped_column(BigInteger, default=0)
     volume_gb: Mapped[int] = mapped_column(Integer, default=0)
     lock_volume: Mapped[bool] = mapped_column(Boolean, default=False)
     default_duration_days: Mapped[int] = mapped_column(Integer, default=30)

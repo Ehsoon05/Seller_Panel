@@ -101,6 +101,45 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ledger), 1)
             self.assertEqual(ledger[0].amount, -100_000)
 
+    async def test_per_gb_offer_charges_selected_volume(self) -> None:
+        payload = {
+            "username": "SellerVIP1",
+            "status": "active",
+            "used_traffic": 0,
+            "data_limit": 10 * 1024**3,
+            "expire": 1_900_000_000,
+            "_subscription_url": "https://panel.example/sub/per-gb",
+        }
+        body = CreateServiceBody(
+            request_id="per-gb-service-00000000000001",
+            offer_id=self.offer_id,
+            volume_gb=10,
+            duration_days=30,
+            time_mode="date",
+        )
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 2_500
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)) as provision,
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                service = await create_service(session, seller, body)
+
+            await session.refresh(seller)
+            self.assertEqual(service.volume_gb, 10)
+            self.assertEqual(service.price_toman, 25_000)
+            self.assertEqual(seller.wallet_balance, 475_000)
+            self.assertEqual(provision.await_args.kwargs["volume_gb"], 10)
+            ledger = list((await session.execute(select(SellerLedger))).scalars())
+            self.assertEqual(len(ledger), 1)
+            self.assertEqual(ledger[0].amount, -25_000)
+
     async def test_panel_failure_cancels_charge_without_ledger_rows(self) -> None:
         body = CreateServiceBody(
             request_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -403,6 +442,8 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_remove_deletes_provider_subscription_and_local_row(self) -> None:
         async with self.sessions() as session:
+            seller = await session.get(Seller, self.seller_id)
+            seller.wallet_balance = 400_000
             service = SellerService(
                 request_id="remove-service-000000000001",
                 seller_id=self.seller_id,
@@ -418,9 +459,20 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
                 price_toman=100_000,
             )
             session.add(service)
+            await session.flush()
+            ledger = SellerLedger(
+                seller_id=self.seller_id,
+                amount=-100_000,
+                balance_after=400_000,
+                kind="purchase",
+                description="خرید سرویس حذف‌شونده",
+                service_id=service.id,
+            )
+            session.add(ledger)
             await session.commit()
             await session.refresh(service)
             service_id = service.id
+            ledger_id = ledger.id
             with (
                 patch("backend.service.get_panel", return_value=self.panel),
                 patch("backend.service.delete_user", AsyncMock()) as provider_delete,
@@ -430,6 +482,12 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             provider_delete.assert_awaited_once()
             sub_delete.assert_awaited_once()
             self.assertIsNone(await session.get(SellerService, service_id))
+            await session.refresh(seller)
+            self.assertEqual(seller.wallet_balance, 400_000)
+            preserved_ledger = await session.get(SellerLedger, ledger_id)
+            self.assertIsNotNone(preserved_ledger)
+            self.assertEqual(preserved_ledger.amount, -100_000)
+            self.assertIsNone(preserved_ledger.service_id)
 
     async def test_edit_updates_provider_cache_and_subscription(self) -> None:
         async with self.sessions() as session:

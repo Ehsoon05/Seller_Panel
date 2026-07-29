@@ -365,7 +365,7 @@ function ServicesPage() {
               <button type="button" className="icon-button" onClick={() => setEditing(null)} aria-label="بستن"><X size={18} /></button>
             </div>
             <div className="form-grid">
-              {editingOffer?.lock_volume ? <div className="locked-value"><strong>حجم ثابت</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، صفر نامحدود)<input type="number" min="0" max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
+              {editingOffer?.lock_volume || editingOffer?.pricing_mode === "per_gb" ? <div className="locked-value"><strong>حجم خریداری‌شده</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، صفر نامحدود)<input type="number" min="0" max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
               {editingOffer?.lock_time_mode ? <div className="locked-value"><strong>نوع تاریخ ثابت</strong><span>{editForm.time_mode === "unlimited" ? "بدون محدودیت زمانی" : editForm.time_mode === "on_hold" ? "شروع با اولین اتصال - On Hold" : "تاریخ‌دار - Active"}</span></div> : <label>نوع تاریخ
                 <select value={editForm.time_mode} onChange={(event) => setEditForm({ ...editForm, time_mode: event.target.value })}>
                   {(editingOffer?.allowed_time_modes || ["date", "on_hold", "unlimited"]).map((item) => (
@@ -394,6 +394,7 @@ function CreatePage() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [offerId, setOfferId] = useState<number | null>(null);
   const [displayName, setDisplayName] = useState("");
+  const [volume, setVolume] = useState(20);
   const [duration, setDuration] = useState(30);
   const [mode, setMode] = useState("date");
   const [busy, setBusy] = useState(false);
@@ -402,9 +403,16 @@ function CreatePage() {
   const offer = useMemo(() => offers.find((item) => item.id === offerId), [offers, offerId]);
   useEffect(() => {
     if (!offer) return;
+    setVolume(offer.volume_gb);
     setDuration(offer.default_duration_days);
     setMode(offer.default_time_mode);
   }, [offer]);
+  const finalPrice = useMemo(() => {
+    if (!offer) return 0;
+    return offer.pricing_mode === "per_gb"
+      ? offer.price_per_gb_toman * volume
+      : offer.price_toman;
+  }, [offer, volume]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!offer) return;
@@ -418,6 +426,7 @@ function CreatePage() {
           offer_id: offer.id,
           panel_username: displayName.trim(),
           display_name: null,
+          volume_gb: volume,
           duration_days: mode === "unlimited" ? 0 : duration,
           time_mode: mode,
         }),
@@ -439,7 +448,7 @@ function CreatePage() {
             {offers.map((item) => (
               <button type="button" key={item.id} className={offerId === item.id ? "offer selected" : "offer"} onClick={() => setOfferId(item.id)}>
                 <div><strong>{item.title}</strong><span>{item.volume_gb ? `${item.volume_gb} GB` : "حجم نامحدود"}</span></div>
-                <b>{toman(item.price_toman)}</b>
+                <b>{item.pricing_mode === "per_gb" ? `${toman(item.price_per_gb_toman)} / گیگ` : toman(item.price_toman)}</b>
                 <i>{offerId === item.id && <Check size={15} />}</i>
               </button>
             ))}
@@ -450,6 +459,9 @@ function CreatePage() {
               <div className="step-head"><span>۲</span><div><h2>مشخصات ساخت</h2><p>یوزرنیم مستقیماً داخل پنل سازنده ثبت می‌شود و باید یکتا باشد.</p></div></div>
               <div className="form-grid">
                 <label className="wide">یوزرنیم کانفیگ<input dir="ltr" required minLength={3} maxLength={120} pattern="[A-Za-z0-9_-]+" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+                {offer.lock_volume
+                  ? <div className="locked-value"><strong>حجم ثابت</strong><span>{volume ? `${volume.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div>
+                  : <label>حجم سرویس (GB)<input type="number" min={offer.pricing_mode === "per_gb" ? 1 : 0} max="100000" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>}
                 {offer.lock_time_mode ? <div className="locked-value"><strong>نوع تاریخ ثابت</strong><span>{mode === "unlimited" ? "بدون محدودیت زمانی" : mode === "on_hold" ? "شروع با اولین اتصال - On Hold" : "تاریخ‌دار - Active"}</span></div> : <label>نوع تاریخ<select value={mode} onChange={(event) => setMode(event.target.value)}>{offer.allowed_time_modes.map((item) => <option key={item} value={item}>{item === "date" ? "تاریخ‌دار - Active" : item === "on_hold" ? "شروع با اولین اتصال - On Hold" : "بدون محدودیت زمانی - Active"}</option>)}</select></label>}
                 {mode !== "unlimited" && (offer.lock_duration ? <div className="locked-value"><strong>مدت ثابت</strong><span>{offer.default_duration_days.toLocaleString("fa-IR")} روز</span></div> : <label>مدت سرویس (روز)<input type="number" min="1" max="3650" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></label>)}
               </div>
@@ -462,11 +474,12 @@ function CreatePage() {
           <h2>خلاصه سفارش</h2>
           <dl>
             <div><dt>سرویس</dt><dd>{offer?.title || "-"}</dd></div>
-            <div><dt>حجم</dt><dd>{offer ? (offer.volume_gb ? `${offer.volume_gb} GB` : "نامحدود") : "-"}</dd></div>
+            <div><dt>حجم</dt><dd>{offer ? (volume ? `${volume} GB` : "نامحدود") : "-"}</dd></div>
             <div><dt>مدت</dt><dd>{mode === "unlimited" ? "نامحدود" : `${duration.toLocaleString("fa-IR")} روز`}</dd></div>
             <div><dt>محدودیت دستگاه</dt><dd>{offer?.subscription_device_limit ? `${offer.subscription_device_limit.toLocaleString("fa-IR")} دستگاه` : "نامحدود"}</dd></div>
           </dl>
-          <div className="total"><span>مبلغ قابل پرداخت</span><strong>{offer ? toman(offer.price_toman) : "-"}</strong></div>
+          {offer?.pricing_mode === "per_gb" && <p className="hint">محاسبه: {volume.toLocaleString("fa-IR")} گیگ × {toman(offer.price_per_gb_toman)}</p>}
+          <div className="total"><span>مبلغ قابل پرداخت</span><strong>{offer ? toman(finalPrice) : "-"}</strong></div>
           <Button type="submit" busy={busy} disabled={!offer}>ساخت و دریافت لینک <ArrowLeft size={18} /></Button>
           <p className="hint">پس از ساخت موفق، مبلغ از موجودی پنل کسر می‌شود.</p>
         </aside>

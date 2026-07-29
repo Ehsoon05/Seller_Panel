@@ -16,6 +16,7 @@ class CreateServiceBody(BaseModel):
         pattern=r"^[A-Za-z0-9_-]{3,120}$",
     )
     display_name: str | None = Field(default=None, max_length=160)
+    volume_gb: int | None = Field(default=None, ge=0, le=100000)
     duration_days: int | None = Field(default=None, ge=0, le=3650)
     time_mode: str | None = None
 
@@ -55,6 +56,8 @@ class OfferBody(BaseModel):
     title: str = Field(min_length=2, max_length=140)
     panel_key: str = Field(min_length=1, max_length=80)
     price_toman: int = Field(ge=0)
+    pricing_mode: str = "fixed"
+    price_per_gb_toman: int = Field(default=0, ge=0)
     volume_gb: int = Field(ge=0, le=100000)
     lock_volume: bool = False
     default_duration_days: int = Field(default=30, ge=0, le=3650)
@@ -71,6 +74,13 @@ class OfferBody(BaseModel):
     show_config_preview: bool = True
     info_proxies_enabled: bool = False
     is_active: bool = True
+
+    @field_validator("pricing_mode")
+    @classmethod
+    def validate_pricing_mode(cls, value: str) -> str:
+        if value not in {"fixed", "per_gb"}:
+            raise ValueError("Pricing mode must be fixed or per_gb")
+        return value
 
     @field_validator("allowed_time_modes")
     @classmethod

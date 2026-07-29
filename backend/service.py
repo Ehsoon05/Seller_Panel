@@ -75,6 +75,8 @@ def offer_out(offer: SellerOffer) -> dict:
         "title": offer.title,
         "panel_key": offer.panel_key,
         "price_toman": offer.price_toman,
+        "pricing_mode": offer.pricing_mode,
+        "price_per_gb_toman": offer.price_per_gb_toman,
         "volume_gb": offer.volume_gb,
         "lock_volume": offer.lock_volume,
         "default_duration_days": offer.default_duration_days,
@@ -247,7 +249,20 @@ async def create_service(
     ).scalar_one_or_none()
     if offer is None:
         raise HTTPException(status_code=404, detail="سرویس انتخاب‌شده در دسترس نیست.")
-    offer_price = int(offer.price_toman)
+    volume_gb = (
+        int(offer.volume_gb)
+        if offer.lock_volume or body.volume_gb is None
+        else int(body.volume_gb)
+    )
+    if offer.pricing_mode == "per_gb":
+        if volume_gb <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="برای سرویس با قیمت‌گذاری گیگی، حجم باید بیشتر از صفر باشد.",
+            )
+        offer_price = int(offer.price_per_gb_toman) * volume_gb
+    else:
+        offer_price = int(offer.price_toman)
 
     modes = allowed_time_modes(offer)
     mode = (
@@ -320,7 +335,7 @@ async def create_service(
         payload = await create_user(
             panel,
             username=username,
-            volume_gb=offer.volume_gb,
+            volume_gb=volume_gb,
             duration_days=duration_days,
             time_mode=mode,
             hwid_limit=offer.panel_hwid_limit,
@@ -356,7 +371,7 @@ async def create_service(
         upstream_url=str(payload["_subscription_url"]),
         public_token=public_token,
         public_url=public_url,
-        volume_gb=offer.volume_gb,
+        volume_gb=volume_gb,
         duration_days=duration_days,
         time_mode=mode,
         price_toman=offer_price,
@@ -458,6 +473,11 @@ async def update_service(
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     if offer.lock_volume and body.volume_gb != service.volume_gb:
         raise HTTPException(status_code=403, detail="حجم این سرویس توسط مدیریت قفل شده است.")
+    if offer.pricing_mode == "per_gb" and body.volume_gb != service.volume_gb:
+        raise HTTPException(
+            status_code=403,
+            detail="حجم سرویس گیگی پس از خرید قابل تغییر نیست؛ سرویس جدید بسازید.",
+        )
     if offer.lock_time_mode and body.time_mode != service.time_mode:
         raise HTTPException(status_code=403, detail="نوع تاریخ این سرویس توسط مدیریت قفل شده است.")
     if (

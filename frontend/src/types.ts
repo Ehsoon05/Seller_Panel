@@ -20,6 +20,8 @@ export interface Offer {
   title: string;
   panel_key: string;
   price_toman: number;
+  pricing_mode: "fixed" | "per_gb";
+  price_per_gb_toman: number;
   volume_gb: number;
   lock_volume: boolean;
   default_duration_days: number;

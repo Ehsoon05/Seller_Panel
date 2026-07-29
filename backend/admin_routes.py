@@ -194,6 +194,8 @@ def _apply_offer(offer: SellerOffer, body: OfferBody) -> None:
     offer.title = body.title.strip()
     offer.panel_key = body.panel_key.strip()
     offer.price_toman = body.price_toman
+    offer.pricing_mode = body.pricing_mode
+    offer.price_per_gb_toman = body.price_per_gb_toman
     offer.volume_gb = body.volume_gb
     offer.lock_volume = body.lock_volume
     offer.default_duration_days = body.default_duration_days
