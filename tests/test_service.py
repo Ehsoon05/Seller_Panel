@@ -146,6 +146,48 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ledger), 1)
             self.assertEqual(ledger[0].amount, -25_000)
 
+    async def test_offer_minimum_volume_and_duration_are_enforced(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 3_000
+            offer.min_volume_gb = 10
+            offer.min_duration_days = 7
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+
+            with self.assertRaises(HTTPException) as volume_error:
+                await create_service(
+                    session,
+                    seller,
+                    CreateServiceBody(
+                        request_id="minimum-volume-000000000001",
+                        offer_id=self.offer_id,
+                        volume_gb=5,
+                        duration_days=30,
+                        time_mode="date",
+                    ),
+                )
+            self.assertEqual(volume_error.exception.status_code, 400)
+            self.assertIn("10", volume_error.exception.detail)
+
+            with self.assertRaises(HTTPException) as duration_error:
+                await create_service(
+                    session,
+                    seller,
+                    CreateServiceBody(
+                        request_id="minimum-duration-000000001",
+                        offer_id=self.offer_id,
+                        volume_gb=10,
+                        duration_days=3,
+                        time_mode="date",
+                    ),
+                )
+            self.assertEqual(duration_error.exception.status_code, 400)
+            self.assertIn("7", duration_error.exception.detail)
+            await session.refresh(seller)
+            self.assertEqual(seller.wallet_balance, 500_000)
+
     async def test_panel_failure_cancels_charge_without_ledger_rows(self) -> None:
         body = CreateServiceBody(
             request_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -625,6 +667,48 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             provider_update.assert_not_awaited()
             seller = await session.get(Seller, self.seller_id)
             self.assertEqual(seller.wallet_balance, 500_000)
+
+    async def test_edit_cannot_go_below_offer_minimums(self) -> None:
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 3_000
+            offer.min_volume_gb = 10
+            offer.min_duration_days = 7
+            service = SellerService(
+                request_id="minimum-edit-00000000000001",
+                seller_id=self.seller_id,
+                offer_id=self.offer_id,
+                panel_key="easy",
+                panel_username="MinimumEdit",
+                upstream_url="https://panel.example/sub/minimum-edit",
+                public_token="minimum-edit-token",
+                public_url="https://api.example/token/minimum-edit-token",
+                volume_gb=20,
+                duration_days=30,
+                time_mode="date",
+                price_toman=60_000,
+                used_bytes=2 * 1024**3,
+                data_limit_bytes=20 * 1024**3,
+            )
+            session.add(service)
+            await session.commit()
+
+            with self.assertRaises(HTTPException) as volume_error:
+                await update_service(
+                    session,
+                    service,
+                    ServiceUpdateBody(volume_gb=9, duration_days=30, time_mode="date"),
+                )
+            self.assertEqual(volume_error.exception.status_code, 400)
+
+            with self.assertRaises(HTTPException) as duration_error:
+                await update_service(
+                    session,
+                    service,
+                    ServiceUpdateBody(volume_gb=20, duration_days=6, time_mode="date"),
+                )
+            self.assertEqual(duration_error.exception.status_code, 400)
 
     async def test_renewal_charges_resets_usage_and_is_idempotent(self) -> None:
         async with self.sessions() as session:

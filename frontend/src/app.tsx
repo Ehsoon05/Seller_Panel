@@ -413,7 +413,7 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
               <button type="button" className="icon-button" onClick={() => setEditing(null)} aria-label="بستن"><X size={18} /></button>
             </div>
             <div className="form-grid">
-              {editingOffer?.lock_volume ? <div className="locked-value"><strong>حجم خریداری‌شده</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، صفر نامحدود)<input type="number" min={editingOffer?.pricing_mode === "per_gb" ? 1 : 0} max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
+              {editingOffer?.lock_volume ? <div className="locked-value"><strong>حجم خریداری‌شده</strong><span>{editForm.volume_gb ? `${editForm.volume_gb.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div> : <label>حجم (GB، حداقل {Math.max(editingOffer?.min_volume_gb ?? 0, editingOffer?.pricing_mode === "per_gb" ? 1 : 0)})<input type="number" min={Math.max(editingOffer?.min_volume_gb ?? 0, editingOffer?.pricing_mode === "per_gb" ? 1 : 0)} max="100000" value={editForm.volume_gb} onChange={(event) => setEditForm({ ...editForm, volume_gb: Number(event.target.value) })} /></label>}
               {editingOffer?.lock_time_mode ? <div className="locked-value"><strong>نوع تاریخ ثابت</strong><span>{editForm.time_mode === "unlimited" ? "بدون محدودیت زمانی" : editForm.time_mode === "on_hold" ? "شروع با اولین اتصال - On Hold" : "تاریخ‌دار - Active"}</span></div> : <label>نوع تاریخ
                 <select value={editForm.time_mode} onChange={(event) => setEditForm({ ...editForm, time_mode: event.target.value })}>
                   {(editingOffer?.allowed_time_modes || ["date", "on_hold", "unlimited"]).map((item) => (
@@ -423,7 +423,7 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
               </label>}
               {editForm.time_mode !== "unlimited" && (editingOffer?.lock_duration
                 ? <div className="locked-value"><strong>مدت ثابت</strong><span>{editingOffer.default_duration_days.toLocaleString("fa-IR")} روز</span></div>
-                : <label className="wide">مدت از اکنون (روز)<input type="number" min="1" max="3650" value={editForm.duration_days} onChange={(event) => setEditForm({ ...editForm, duration_days: Number(event.target.value) })} /></label>)}
+                : <label className="wide">مدت از اکنون (حداقل {editingOffer?.min_duration_days ?? 1} روز)<input type="number" min={editingOffer?.min_duration_days ?? 1} max="3650" value={editForm.duration_days} onChange={(event) => setEditForm({ ...editForm, duration_days: Number(event.target.value) })} /></label>)}
             </div>
             {editingOffer?.pricing_mode === "per_gb" && editForm.volume_gb !== editing.volume_gb && (
               <div className={`price-adjustment ${editForm.volume_gb > editing.volume_gb ? "charge" : "refund"}`}>
@@ -542,9 +542,9 @@ function CreatePage() {
                 <label className="wide">یوزرنیم کانفیگ<input dir="ltr" required minLength={3} maxLength={120} pattern="[A-Za-z0-9_-]+" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
                 {offer.lock_volume
                   ? <div className="locked-value"><strong>حجم ثابت</strong><span>{volume ? `${volume.toLocaleString("fa-IR")} GB` : "نامحدود"}</span></div>
-                  : <label>حجم سرویس (GB)<input type="number" min={offer.pricing_mode === "per_gb" ? 1 : 0} max="100000" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>}
+                  : <label>حجم سرویس (حداقل {Math.max(offer.min_volume_gb, offer.pricing_mode === "per_gb" ? 1 : 0)}GB)<input type="number" min={Math.max(offer.min_volume_gb, offer.pricing_mode === "per_gb" ? 1 : 0)} max="100000" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>}
                 {offer.lock_time_mode ? <div className="locked-value"><strong>نوع تاریخ ثابت</strong><span>{mode === "unlimited" ? "بدون محدودیت زمانی" : mode === "on_hold" ? "شروع با اولین اتصال - On Hold" : "تاریخ‌دار - Active"}</span></div> : <label>نوع تاریخ<select value={mode} onChange={(event) => setMode(event.target.value)}>{offer.allowed_time_modes.map((item) => <option key={item} value={item}>{item === "date" ? "تاریخ‌دار - Active" : item === "on_hold" ? "شروع با اولین اتصال - On Hold" : "بدون محدودیت زمانی - Active"}</option>)}</select></label>}
-                {mode !== "unlimited" && (offer.lock_duration ? <div className="locked-value"><strong>مدت ثابت</strong><span>{offer.default_duration_days.toLocaleString("fa-IR")} روز</span></div> : <label>مدت سرویس (روز)<input type="number" min="1" max="3650" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></label>)}
+                {mode !== "unlimited" && (offer.lock_duration ? <div className="locked-value"><strong>مدت ثابت</strong><span>{offer.default_duration_days.toLocaleString("fa-IR")} روز</span></div> : <label>مدت سرویس (حداقل {offer.min_duration_days} روز)<input type="number" min={offer.min_duration_days} max="3650" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /></label>)}
               </div>
               {(offer.lock_volume || offer.lock_time_mode || offer.lock_duration) && <p className="hint">مقادیر قفل‌شده توسط مدیریت قابل تغییر نیستند.</p>}
             </>

@@ -54,6 +54,20 @@ async def initialize_database() -> None:
                         "lock_volume BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
+            if "min_volume_gb" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "min_volume_gb INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            if "min_duration_days" not in offer_columns:
+                sync_connection.execute(
+                    text(
+                        "ALTER TABLE seller_offers ADD COLUMN "
+                        "min_duration_days INTEGER NOT NULL DEFAULT 1"
+                    )
+                )
             if "lock_time" not in offer_columns:
                 sync_connection.execute(
                     text(

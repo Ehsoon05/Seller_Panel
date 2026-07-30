@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class LoginBody(BaseModel):
@@ -63,8 +63,10 @@ class OfferBody(BaseModel):
     pricing_mode: str = "fixed"
     price_per_gb_toman: int = Field(default=0, ge=0)
     volume_gb: int = Field(ge=0, le=100000)
+    min_volume_gb: int = Field(default=0, ge=0, le=100000)
     lock_volume: bool = False
     default_duration_days: int = Field(default=30, ge=0, le=3650)
+    min_duration_days: int = Field(default=1, ge=0, le=3650)
     allowed_time_modes: list[str] = Field(default_factory=lambda: ["date"])
     default_time_mode: str = "date"
     lock_time_mode: bool = False
@@ -94,3 +96,15 @@ class OfferBody(BaseModel):
         if not normalized:
             raise ValueError("At least one time mode is required")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_plan_limits(self):
+        minimum_volume = max(1, self.min_volume_gb) if self.pricing_mode == "per_gb" else self.min_volume_gb
+        if self.volume_gb < minimum_volume:
+            raise ValueError("Default volume cannot be lower than minimum volume")
+        if (
+            self.default_time_mode != "unlimited"
+            and self.default_duration_days < self.min_duration_days
+        ):
+            raise ValueError("Default duration cannot be lower than minimum duration")
+        return self

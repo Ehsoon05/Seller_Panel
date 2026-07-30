@@ -80,8 +80,10 @@ def offer_out(offer: SellerOffer) -> dict:
         "pricing_mode": offer.pricing_mode,
         "price_per_gb_toman": offer.price_per_gb_toman,
         "volume_gb": offer.volume_gb,
+        "min_volume_gb": offer.min_volume_gb,
         "lock_volume": offer.lock_volume,
         "default_duration_days": offer.default_duration_days,
+        "min_duration_days": offer.min_duration_days,
         "allowed_time_modes": allowed_time_modes(offer),
         "default_time_mode": offer.default_time_mode,
         "lock_time": offer.lock_time,
@@ -271,6 +273,15 @@ async def create_service(
         if offer.lock_volume or body.volume_gb is None
         else int(body.volume_gb)
     )
+    minimum_volume = max(
+        int(offer.min_volume_gb or 0),
+        1 if offer.pricing_mode == "per_gb" else 0,
+    )
+    if volume_gb < minimum_volume:
+        raise HTTPException(
+            status_code=400,
+            detail=f"حداقل حجم قابل ساخت برای این سرویس {minimum_volume} گیگ است.",
+        )
     if offer.pricing_mode == "per_gb":
         if volume_gb <= 0:
             raise HTTPException(
@@ -300,8 +311,11 @@ async def create_service(
     )
     if mode == "unlimited":
         duration_days = 0
-    elif duration_days <= 0:
-        raise HTTPException(status_code=400, detail="مدت سرویس باید بیشتر از صفر باشد.")
+    elif duration_days < int(offer.min_duration_days or 0):
+        raise HTTPException(
+            status_code=400,
+            detail=f"حداقل مدت قابل ساخت برای این سرویس {offer.min_duration_days} روز است.",
+        )
 
     panel = get_panel(offer.panel_key)
     requested_username = (body.panel_username or "").strip()
@@ -489,6 +503,15 @@ async def update_service(
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     if offer.lock_volume and body.volume_gb != service.volume_gb:
         raise HTTPException(status_code=403, detail="حجم این سرویس توسط مدیریت قفل شده است.")
+    minimum_volume = max(
+        int(offer.min_volume_gb or 0),
+        1 if offer.pricing_mode == "per_gb" else 0,
+    )
+    if body.volume_gb < minimum_volume:
+        raise HTTPException(
+            status_code=400,
+            detail=f"حداقل حجم این سرویس {minimum_volume} گیگ است.",
+        )
     if offer.pricing_mode == "per_gb" and body.volume_gb <= 0:
         raise HTTPException(
             status_code=400,
@@ -502,8 +525,14 @@ async def update_service(
         and body.duration_days != offer.default_duration_days
     ):
         raise HTTPException(status_code=403, detail="مدت این سرویس توسط مدیریت قفل شده است.")
-    if body.time_mode != "unlimited" and body.duration_days <= 0:
-        raise HTTPException(status_code=400, detail="مدت سرویس باید بیشتر از صفر باشد.")
+    if (
+        body.time_mode != "unlimited"
+        and body.duration_days < int(offer.min_duration_days or 0)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"حداقل مدت این سرویس {offer.min_duration_days} روز است.",
+        )
     duration_days = (
         0
         if body.time_mode == "unlimited"
