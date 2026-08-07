@@ -8,14 +8,27 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 70_000);
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...options,
+      signal: options.signal || controller.signal,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === "AbortError") {
+      throw new ApiError("پاسخ پنل سازنده بیش از حد طول کشید. دوباره تلاش کنید.", 408);
+    }
+    throw reason;
+  } finally {
+    window.clearTimeout(timer);
+  }
   if (!response.ok) {
     let message = "عملیات انجام نشد.";
     try {
@@ -67,4 +80,3 @@ export const statusLabel = (status: string) =>
     limited: "اتمام حجم",
     deleted: "حذف‌شده",
   })[status] || status;
-

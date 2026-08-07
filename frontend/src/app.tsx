@@ -21,7 +21,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { api, ApiError, bytes, date, relativeDays, statusLabel, toman } from "./lib";
@@ -480,6 +480,8 @@ function CreatePage() {
   const [mode, setMode] = useState("date");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submitLock = useRef(false);
+  const requestId = useRef<string | null>(null);
   useEffect(() => { api<Offer[]>("/offers").then((rows) => { setOffers(rows); if (rows[0]) setOfferId(rows[0].id); }); }, []);
   const offer = useMemo(() => offers.find((item) => item.id === offerId), [offers, offerId]);
   useEffect(() => {
@@ -496,14 +498,16 @@ function CreatePage() {
   }, [offer, volume]);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!offer) return;
+    if (!offer || submitLock.current) return;
+    submitLock.current = true;
+    requestId.current ||= crypto.randomUUID();
     setBusy(true);
     setError("");
     try {
       await api<Service>("/services", {
         method: "POST",
         body: JSON.stringify({
-          request_id: crypto.randomUUID(),
+          request_id: requestId.current,
           offer_id: offer.id,
           panel_username: displayName.trim(),
           display_name: null,
@@ -512,10 +516,12 @@ function CreatePage() {
           time_mode: mode,
         }),
       });
+      requestId.current = null;
       window.location.assign("/services");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "ساخت سرویس انجام نشد.");
     } finally {
+      submitLock.current = false;
       setBusy(false);
     }
   }

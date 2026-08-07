@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./seller_panel.db"
     phantom_database_path: str = "/opt/phantom/bot_data.db"
     svn_panel_api_url: str = ""
+    mexico_panel_api_url: str = ""
     jwt_secret: str
     admin_jwt_secret: str
     subscription_sync_url: str = Field(

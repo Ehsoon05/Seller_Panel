@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -16,6 +17,10 @@ from .config import settings
 
 class PanelError(RuntimeError):
     pass
+
+
+MEXICO_PANEL_KEYS = {"mexico_hajmi", "mexico_namahdod"}
+MEXICO_UNLIMITED_DATA_LIMIT_BYTES = 300 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -86,7 +91,15 @@ def _error(response: httpx.Response, action: str) -> PanelError:
 def _api_base_url(panel: Panel) -> str:
     if panel.key == "svn" and settings.svn_panel_api_url:
         return settings.svn_panel_api_url.rstrip("/")
+    if panel.key in MEXICO_PANEL_KEYS and settings.mexico_panel_api_url:
+        return settings.mexico_panel_api_url.rstrip("/")
     return panel.base_url
+
+
+def _provider_data_limit(panel: Panel, volume_gb: int) -> int:
+    if panel.key == "mexico_namahdod":
+        return MEXICO_UNLIMITED_DATA_LIMIT_BYTES
+    return volume_gb * 1024**3 if volume_gb > 0 else 0
 
 
 async def _token(client: httpx.AsyncClient, panel: Panel) -> str:
@@ -206,22 +219,53 @@ async def create_user(
         token = await _token(client, panel)
         headers = {"Authorization": f"Bearer {token}"}
         access = await _access_fields(client, panel, headers, hwid_limit)
-        response = await client.post(
-            "/api/user",
-            headers=headers,
-            json={
-                "username": username,
-                "data_limit": volume_gb * 1024**3 if volume_gb > 0 else 0,
-                "data_limit_reset_strategy": "no_reset",
-                **_timing(time_mode, duration_days),
-                **access,
-            },
-        )
-        if response.is_error:
-            raise _error(response, "ساخت سرویس")
-        payload = response.json()
+        try:
+            response = await client.post(
+                "/api/user",
+                headers=headers,
+                json={
+                    "username": username,
+                    "data_limit": _provider_data_limit(panel, volume_gb),
+                    "data_limit_reset_strategy": "no_reset",
+                    **_timing(time_mode, duration_days),
+                    **access,
+                },
+            )
+        except httpx.TimeoutException as exc:
+            payload = await _recover_created_user(client, headers, username)
+            if payload is None:
+                raise PanelError(
+                    "پنل سازنده در مهلت مقرر پاسخ نداد؛ موجودی شما بازگردانده شد."
+                ) from exc
+        else:
+            if response.is_error:
+                raise _error(response, "ساخت سرویس")
+            payload = response.json()
     payload["_subscription_url"] = _subscription_url(panel.base_url, payload)
     return payload
+
+
+async def _recover_created_user(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    username: str,
+) -> dict[str, Any] | None:
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(0.75 * attempt)
+        try:
+            response = await client.get(f"/api/user/{username}", headers=headers)
+        except httpx.HTTPError:
+            continue
+        if response.status_code == 404 or response.is_error:
+            continue
+        try:
+            payload = response.json()
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("username"):
+            return payload
+    return None
 
 
 async def fetch_user(panel: Panel, username: str) -> dict[str, Any]:
@@ -279,7 +323,7 @@ async def update_user(
             f"/api/user/{username}",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "data_limit": volume_gb * 1024**3 if volume_gb > 0 else 0,
+                "data_limit": _provider_data_limit(panel, volume_gb),
                 "data_limit_reset_strategy": "no_reset",
                 **(_timing(time_mode, duration_days) if update_timing else {}),
             },
