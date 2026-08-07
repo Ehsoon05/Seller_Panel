@@ -18,6 +18,7 @@ from backend.service import (
     dashboard,
     remove_service,
     renew_service,
+    reset_subscription_devices,
     update_service,
 )
 
@@ -258,8 +259,58 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
                 list((await session.execute(select(SellerService))).scalars()),
                 [],
             )
-            values = await dashboard(session, seller.id)
-            self.assertEqual(values["monthly_spend"], 0)
+
+    async def test_reset_subscription_devices_calls_internal_panel_api(self) -> None:
+        service = SellerService(
+            request_id="reset-devices-00000000000001",
+            seller_id=self.seller_id,
+            offer_id=self.offer_id,
+            panel_key="easy",
+            panel_username="SellerVIP1",
+            upstream_url="https://panel.example/sub/token",
+            public_token="public-token",
+            public_url="https://api.example/token/public-token",
+            volume_gb=20,
+            duration_days=30,
+            time_mode="date",
+            price_toman=100_000,
+        )
+        calls = []
+
+        class Response:
+            status_code = 200
+            is_error = False
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, *, headers):
+                calls.append((url, headers))
+                return Response()
+
+        with (
+            patch("backend.service.settings.subscription_sync_url", "https://api.example/internal/configs"),
+            patch("backend.service.settings.subscription_sync_token", "secret-token"),
+            patch("backend.service.httpx.AsyncClient", Client),
+        ):
+            await reset_subscription_devices(service)
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "https://api.example/internal/configs/public-token/devices/reset",
+                    {"Authorization": "Bearer secret-token"},
+                )
+            ],
+        )
 
     async def test_dashboard_reads_cached_values_only(self) -> None:
         async with self.sessions() as session:

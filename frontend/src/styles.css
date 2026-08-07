@@ -157,6 +157,7 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .icon-button.enable { color: var(--green); }
 .icon-button.danger-icon { color: #ff858a; }
 .icon-button.renew-icon { color: #8fa8ff; }
+.icon-button.device-icon { color: #80d7ff; }
 .has-tooltip { position: relative; }
 .has-tooltip::after {
   content: attr(data-tooltip);
@@ -227,7 +228,7 @@ tbody tr:hover { background: rgba(255,255,255,.015); }
 .usage small { color: var(--muted); }
 .progress { height: 4px; width: min(140px, 100%); background: #242b35; border-radius: 4px; overflow: hidden; }
 .progress i { display: block; height: 100%; background: var(--primary); }
-.row-actions { display: flex; gap: 6px; }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; max-width: 100%; }
 .mobile-service-details { display: none; }
 .empty { min-height: 210px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; padding: 30px; }
 .empty strong { color: var(--text); font-size: 14px; }
@@ -353,7 +354,24 @@ tbody tr:hover { background: rgba(255,255,255,.015); }
   .usage { width: min(190px, 65%); }
   .time-cell { text-align: left; }
   .time-cell small { text-align: left; }
-  .row-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; padding-top: 2px; }
+  td[data-label="عملیات"] {
+    display: block;
+  }
+  td[data-label="عملیات"]::before {
+    display: block;
+    margin-bottom: 8px;
+  }
+  .row-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(38px, 1fr));
+    gap: 7px;
+    padding-top: 2px;
+  }
+  .row-actions .icon-button {
+    width: 100%;
+    min-width: 0;
+  }
   .has-tooltip::after { display: none; }
   .mobile-service-details { display: block; width: 100%; margin-top: 9px; border-top: 1px solid var(--line); }
   .mobile-service-details summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 2px; color: #9bb0ff; cursor: pointer; font-size: 11px; list-style: none; }

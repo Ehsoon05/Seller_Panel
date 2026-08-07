@@ -20,6 +20,7 @@ from .service import (
     offer_out,
     refresh_service,
     remove_service,
+    reset_subscription_devices,
     renewal_quote,
     renew_service,
     seller_out,
@@ -148,6 +149,17 @@ async def refresh(
         return service_out(await refresh_service(session, service))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc) or "به‌روزرسانی انجام نشد.") from exc
+
+
+@router.post("/services/{service_id}/devices/reset")
+async def reset_devices(
+    service_id: int,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    await reset_subscription_devices(service)
+    return {"ok": True}
 
 
 @router.post("/services/{service_id}/status")

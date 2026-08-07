@@ -193,6 +193,27 @@ async def delete_subscription(service: SellerService) -> None:
         response.raise_for_status()
 
 
+async def reset_subscription_devices(service: SellerService) -> None:
+    if not settings.subscription_sync_url or not settings.subscription_sync_token:
+        raise HTTPException(status_code=409, detail="اتصال داخلی پنل ساب تنظیم نشده است.")
+    url = (
+        f"{settings.subscription_sync_url.rstrip('/')}/"
+        f"{quote(service.public_token, safe='')}/devices/reset"
+    )
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {settings.subscription_sync_token}"},
+        )
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="لینک پنل ساب این سرویس پیدا نشد.")
+    if response.is_error:
+        raise HTTPException(
+            status_code=502,
+            detail="ریست محدودیت کاربر در پنل ساب انجام نشد.",
+        )
+
+
 async def notify_service_created(
     seller: Seller,
     offer: SellerOffer,
