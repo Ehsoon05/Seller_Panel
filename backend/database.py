@@ -58,7 +58,7 @@ async def initialize_database() -> None:
                 sync_connection.execute(
                     text(
                         "ALTER TABLE seller_offers ADD COLUMN "
-                        "min_volume_gb INTEGER NOT NULL DEFAULT 0"
+                        "min_volume_gb FLOAT NOT NULL DEFAULT 0"
                     )
                 )
             if "min_duration_days" not in offer_columns:

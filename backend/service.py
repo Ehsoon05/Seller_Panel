@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import logging
+import math
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,40 @@ from .schemas import CreateServiceBody, ServiceRenewBody, ServiceUpdateBody
 
 
 logger = logging.getLogger(__name__)
+
+
+def _volume_gb(value: float | int | None) -> float:
+    return max(0.0, float(value or 0))
+
+
+def _volume_bytes(value: float | int | None) -> int:
+    volume = _volume_gb(value)
+    return int(round(volume * 1024**3)) if volume > 0 else 0
+
+
+def _minimum_volume(offer: SellerOffer) -> float:
+    configured = _volume_gb(offer.min_volume_gb)
+    return max(0.001, configured) if offer.pricing_mode == "per_gb" else configured
+
+
+def _price_for_volume(price_per_gb: int, volume_gb: float | int | None) -> int:
+    return int(math.ceil(max(0.0, float(price_per_gb) * _volume_gb(volume_gb))))
+
+
+def _price_for_volume_delta(price_per_gb: int, volume_delta_gb: float) -> int:
+    if volume_delta_gb == 0:
+        return 0
+    amount = int(math.ceil(abs(float(price_per_gb) * volume_delta_gb)))
+    return amount if volume_delta_gb > 0 else -amount
+
+
+def _format_volume(value: float | int | None) -> str:
+    volume = _volume_gb(value)
+    if volume <= 0:
+        return "نامحدود"
+    if volume < 1:
+        return f"{volume * 1024:g} مگابایت"
+    return f"{volume:g} گیگ"
 
 
 def allowed_time_modes(offer: SellerOffer) -> list[str]:
@@ -130,7 +165,7 @@ def service_out(service: SellerService) -> dict:
 
 def renewal_quote(service: SellerService, offer: SellerOffer) -> dict:
     price = (
-        int(offer.price_per_gb_toman) * int(service.volume_gb)
+        _price_for_volume(offer.price_per_gb_toman, service.volume_gb)
         if offer.pricing_mode == "per_gb"
         else int(offer.price_toman)
     )
@@ -226,7 +261,7 @@ async def notify_service_created(
         if service.duration_days == 0
         else f"{service.duration_days:,} روز"
     )
-    volume = "نامحدود" if service.volume_gb == 0 else f"{service.volume_gb:,} گیگ"
+    volume = _format_volume(service.volume_gb)
     mode = {
         "date": "Active - تاریخ‌دار",
         "on_hold": "On Hold - شروع با اولین اتصال",
@@ -290,18 +325,15 @@ async def create_service(
     if offer is None:
         raise HTTPException(status_code=404, detail="سرویس انتخاب‌شده در دسترس نیست.")
     volume_gb = (
-        int(offer.volume_gb)
+        _volume_gb(offer.volume_gb)
         if offer.lock_volume or body.volume_gb is None
-        else int(body.volume_gb)
+        else _volume_gb(body.volume_gb)
     )
-    minimum_volume = max(
-        int(offer.min_volume_gb or 0),
-        1 if offer.pricing_mode == "per_gb" else 0,
-    )
+    minimum_volume = _minimum_volume(offer)
     if volume_gb < minimum_volume:
         raise HTTPException(
             status_code=400,
-            detail=f"حداقل حجم قابل ساخت برای این سرویس {minimum_volume} گیگ است.",
+            detail=f"حداقل حجم قابل ساخت برای این سرویس {_format_volume(minimum_volume)} است.",
         )
     if offer.pricing_mode == "per_gb":
         if volume_gb <= 0:
@@ -309,7 +341,7 @@ async def create_service(
                 status_code=400,
                 detail="برای سرویس با قیمت‌گذاری گیگی، حجم باید بیشتر از صفر باشد.",
             )
-        offer_price = int(offer.price_per_gb_toman) * volume_gb
+        offer_price = _price_for_volume(offer.price_per_gb_toman, volume_gb)
     else:
         offer_price = int(offer.price_toman)
 
@@ -524,16 +556,14 @@ async def update_service(
         raise HTTPException(status_code=400, detail="نوع زمان برای این سرویس مجاز نیست.")
     if offer.lock_volume and body.volume_gb != service.volume_gb:
         raise HTTPException(status_code=403, detail="حجم این سرویس توسط مدیریت قفل شده است.")
-    minimum_volume = max(
-        int(offer.min_volume_gb or 0),
-        1 if offer.pricing_mode == "per_gb" else 0,
-    )
-    if body.volume_gb < minimum_volume:
+    minimum_volume = _minimum_volume(offer)
+    new_volume = _volume_gb(body.volume_gb)
+    if new_volume < minimum_volume:
         raise HTTPException(
             status_code=400,
-            detail=f"حداقل حجم این سرویس {minimum_volume} گیگ است.",
+            detail=f"حداقل حجم این سرویس {_format_volume(minimum_volume)} است.",
         )
-    if offer.pricing_mode == "per_gb" and body.volume_gb <= 0:
+    if offer.pricing_mode == "per_gb" and new_volume <= 0:
         raise HTTPException(
             status_code=400,
             detail="حجم سرویس گیگی باید بیشتر از صفر باشد.",
@@ -567,14 +597,14 @@ async def update_service(
     seller = await session.get(Seller, service.seller_id)
     if seller is None:
         raise HTTPException(status_code=404, detail="حساب همکار پیدا نشد.")
-    old_volume = int(service.volume_gb)
+    old_volume = _volume_gb(service.volume_gb)
     old_duration = int(service.duration_days)
     old_mode = service.time_mode
     old_expires_at = service.expires_at
     timing_changed = duration_days != old_duration or body.time_mode != old_mode
-    volume_delta = int(body.volume_gb) - old_volume
+    volume_delta = new_volume - old_volume
     price_delta = (
-        volume_delta * int(offer.price_per_gb_toman)
+        _price_for_volume_delta(offer.price_per_gb_toman, volume_delta)
         if offer.pricing_mode == "per_gb"
         else 0
     )
@@ -582,7 +612,7 @@ async def update_service(
     if volume_delta < 0:
         current = await fetch_user(panel, service.panel_username)
         used_bytes = max(0, int(current.get("used_traffic") or service.used_bytes or 0))
-        new_limit = int(body.volume_gb) * 1024**3
+        new_limit = _volume_bytes(new_volume)
         if used_bytes > new_limit:
             used_gb = used_bytes / 1024**3
             reducible_gb = max(0, old_volume - used_gb)
@@ -636,7 +666,7 @@ async def update_service(
         payload = await update_user(
             panel,
             username=service.panel_username,
-            volume_gb=body.volume_gb,
+            volume_gb=new_volume,
             duration_days=duration_days,
             time_mode=body.time_mode,
             update_timing=timing_changed,
@@ -646,7 +676,7 @@ async def update_service(
             await _cancel_charge(session, seller.id, price_delta, charge_ledger.id)
         raise
 
-    service.volume_gb = body.volume_gb
+    service.volume_gb = new_volume
     service.duration_days = duration_days
     service.time_mode = body.time_mode
     service.status = str(
@@ -656,7 +686,7 @@ async def update_service(
     service.data_limit_bytes = int(
         payload.get("data_limit")
         if payload.get("data_limit") is not None
-        else body.volume_gb * 1024**3
+        else _volume_bytes(new_volume)
     )
     service.used_bytes = int(payload.get("used_traffic") or service.used_bytes or 0)
     service.expires_at = (
@@ -700,7 +730,7 @@ async def update_service(
                 )
             )
         if offer.pricing_mode == "per_gb":
-            service.price_toman = int(offer.price_per_gb_toman) * int(body.volume_gb)
+            service.price_toman = _price_for_volume(offer.price_per_gb_toman, new_volume)
         await session.commit()
     except Exception:
         await session.rollback()
@@ -800,7 +830,7 @@ async def renew_service(
         service.data_limit_bytes = int(
             payload.get("data_limit")
             if payload.get("data_limit") is not None
-            else service.volume_gb * 1024**3
+            else _volume_bytes(service.volume_gb)
         )
         service.expires_at = (
             _timestamp(payload.get("expire"))

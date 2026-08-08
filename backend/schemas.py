@@ -16,13 +16,13 @@ class CreateServiceBody(BaseModel):
         pattern=r"^[A-Za-z0-9_-]{3,120}$",
     )
     display_name: str | None = Field(default=None, max_length=160)
-    volume_gb: int | None = Field(default=None, ge=0, le=100000)
+    volume_gb: float | None = Field(default=None, ge=0, le=100000)
     duration_days: int | None = Field(default=None, ge=0, le=3650)
     time_mode: str | None = None
 
 
 class ServiceUpdateBody(BaseModel):
-    volume_gb: int = Field(ge=0, le=100000)
+    volume_gb: float = Field(ge=0, le=100000)
     duration_days: int = Field(ge=0, le=3650)
     time_mode: str
 
@@ -62,8 +62,8 @@ class OfferBody(BaseModel):
     price_toman: int = Field(ge=0)
     pricing_mode: str = "fixed"
     price_per_gb_toman: int = Field(default=0, ge=0)
-    volume_gb: int = Field(ge=0, le=100000)
-    min_volume_gb: int = Field(default=0, ge=0, le=100000)
+    volume_gb: float = Field(ge=0, le=100000)
+    min_volume_gb: float = Field(default=0, ge=0, le=100000)
     lock_volume: bool = False
     default_duration_days: int = Field(default=30, ge=0, le=3650)
     min_duration_days: int = Field(default=1, ge=0, le=3650)
@@ -99,7 +99,7 @@ class OfferBody(BaseModel):
 
     @model_validator(mode="after")
     def validate_plan_limits(self):
-        minimum_volume = max(1, self.min_volume_gb) if self.pricing_mode == "per_gb" else self.min_volume_gb
+        minimum_volume = max(0.001, self.min_volume_gb) if self.pricing_mode == "per_gb" else self.min_volume_gb
         if self.volume_gb < minimum_volume:
             raise ValueError("Default volume cannot be lower than minimum volume")
         if (

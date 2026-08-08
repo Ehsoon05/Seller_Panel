@@ -96,10 +96,10 @@ def _api_base_url(panel: Panel) -> str:
     return panel.base_url
 
 
-def _provider_data_limit(panel: Panel, volume_gb: int) -> int:
+def _provider_data_limit(panel: Panel, volume_gb: float) -> int:
     if panel.key == "mexico_namahdod":
         return MEXICO_UNLIMITED_DATA_LIMIT_BYTES
-    return volume_gb * 1024**3 if volume_gb > 0 else 0
+    return int(round(float(volume_gb) * 1024**3)) if volume_gb > 0 else 0
 
 
 async def _token(client: httpx.AsyncClient, panel: Panel) -> str:
@@ -206,7 +206,7 @@ async def create_user(
     panel: Panel,
     *,
     username: str,
-    volume_gb: int,
+    volume_gb: float,
     duration_days: int,
     time_mode: str,
     hwid_limit: int | None,
@@ -308,7 +308,7 @@ async def update_user(
     panel: Panel,
     *,
     username: str,
-    volume_gb: int,
+    volume_gb: float,
     duration_days: int,
     time_mode: str,
     update_timing: bool = True,

@@ -44,6 +44,13 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
 export const toman = (value: number) => `${new Intl.NumberFormat("fa-IR").format(value)} تومان`;
 
+export function volumeLabel(value: number | null | undefined): string {
+  const volume = Math.max(0, Number(value || 0));
+  if (!volume) return "نامحدود";
+  if (volume < 1) return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 }).format(volume * 1024)} MB`;
+  return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 3 }).format(volume)} GB`;
+}
+
 export function bytes(value: number, unlimited = false): string {
   if (!value && unlimited) return "نامحدود";
   if (value < 1024 ** 2) return `${Math.max(0, value / 1024).toFixed(1)} KB`;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -42,8 +42,8 @@ class SellerOffer(Base):
     price_toman: Mapped[int] = mapped_column(BigInteger)
     pricing_mode: Mapped[str] = mapped_column(String(20), default="fixed")
     price_per_gb_toman: Mapped[int] = mapped_column(BigInteger, default=0)
-    volume_gb: Mapped[int] = mapped_column(Integer, default=0)
-    min_volume_gb: Mapped[int] = mapped_column(Integer, default=0)
+    volume_gb: Mapped[float] = mapped_column(Float, default=0)
+    min_volume_gb: Mapped[float] = mapped_column(Float, default=0)
     lock_volume: Mapped[bool] = mapped_column(Boolean, default=False)
     default_duration_days: Mapped[int] = mapped_column(Integer, default=30)
     min_duration_days: Mapped[int] = mapped_column(Integer, default=1)
@@ -81,7 +81,7 @@ class SellerService(Base):
     upstream_url: Mapped[str] = mapped_column(Text)
     public_token: Mapped[str] = mapped_column(String(180), unique=True, index=True)
     public_url: Mapped[str] = mapped_column(Text)
-    volume_gb: Mapped[int] = mapped_column(Integer, default=0)
+    volume_gb: Mapped[float] = mapped_column(Float, default=0)
     duration_days: Mapped[int] = mapped_column(Integer, default=0)
     time_mode: Mapped[str] = mapped_column(String(20))
     price_toman: Mapped[int] = mapped_column(BigInteger)

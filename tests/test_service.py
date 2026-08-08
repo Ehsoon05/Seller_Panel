@@ -147,6 +147,47 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ledger), 1)
             self.assertEqual(ledger[0].amount, -25_000)
 
+    async def test_per_gb_offer_accepts_fractional_volume(self) -> None:
+        half_gb = int(0.5 * 1024**3)
+        payload = {
+            "username": "SellerVIP1",
+            "status": "active",
+            "used_traffic": 0,
+            "data_limit": half_gb,
+            "expire": 1_900_000_000,
+            "_subscription_url": "https://panel.example/sub/per-gb-half",
+        }
+        body = CreateServiceBody(
+            request_id="per-gb-half-service-0000000001",
+            offer_id=self.offer_id,
+            volume_gb=0.5,
+            duration_days=30,
+            time_mode="date",
+        )
+        async with self.sessions() as session:
+            offer = await session.get(SellerOffer, self.offer_id)
+            offer.pricing_mode = "per_gb"
+            offer.price_per_gb_toman = 2_500
+            offer.min_volume_gb = 0.25
+            await session.commit()
+            seller = await session.get(Seller, self.seller_id)
+            with (
+                patch("backend.service.get_panel", return_value=self.panel),
+                patch("backend.service.create_user", AsyncMock(return_value=payload)) as provision,
+                patch("backend.service.sync_subscription", AsyncMock()),
+                patch("backend.service.notify_service_created", AsyncMock()),
+            ):
+                service = await create_service(session, seller, body)
+
+            await session.refresh(seller)
+            self.assertEqual(service.volume_gb, 0.5)
+            self.assertEqual(service.price_toman, 1_250)
+            self.assertEqual(service.data_limit_bytes, half_gb)
+            self.assertEqual(seller.wallet_balance, 498_750)
+            self.assertEqual(provision.await_args.kwargs["volume_gb"], 0.5)
+            ledger = list((await session.execute(select(SellerLedger))).scalars())
+            self.assertEqual(ledger[0].amount, -1_250)
+
     async def test_offer_minimum_volume_and_duration_are_enforced(self) -> None:
         async with self.sessions() as session:
             offer = await session.get(SellerOffer, self.offer_id)
