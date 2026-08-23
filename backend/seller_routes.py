@@ -18,6 +18,7 @@ from .service import (
     create_service,
     dashboard,
     offer_out,
+    refresh_services_for_listing,
     refresh_service,
     remove_service,
     reset_subscription_devices,
@@ -83,6 +84,7 @@ async def offers(
 async def services(
     q: str | None = Query(default=None, max_length=180),
     status: str | None = None,
+    refresh: bool = Query(default=False),
     seller: Seller = Depends(current_seller),
     session: AsyncSession = Depends(get_session),
 ):
@@ -102,6 +104,8 @@ async def services(
     values = (
         await session.execute(query.order_by(SellerService.created_at.desc()).limit(500))
     ).scalars().all()
+    if refresh:
+        values = await refresh_services_for_listing(session, list(values))
     return [service_out(item) for item in values]
 
 

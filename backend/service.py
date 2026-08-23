@@ -24,6 +24,7 @@ from .panels import (
     delete_user,
     fetch_user,
     get_panel,
+    normalize_panel_username,
     reset_user_traffic,
     set_user_status,
     update_user,
@@ -32,6 +33,8 @@ from .schemas import CreateServiceBody, ServiceRenewBody, ServiceUpdateBody
 
 
 logger = logging.getLogger(__name__)
+AUTO_REFRESH_STALE_AFTER_SECONDS = 120
+AUTO_REFRESH_MAX_SERVICES = 60
 
 
 def _volume_gb(value: float | int | None) -> float:
@@ -372,7 +375,7 @@ async def create_service(
 
     panel = get_panel(offer.panel_key)
     requested_username = (body.panel_username or "").strip()
-    username = requested_username or _username_for_offer(offer)
+    username = normalize_panel_username(panel, requested_username or _username_for_offer(offer))
     if requested_username:
         current = await fetch_user(panel, username)
         if str(current.get("status") or "") != "deleted":
@@ -529,6 +532,41 @@ async def refresh_service(session: AsyncSession, service: SellerService) -> Sell
     await session.commit()
     await session.refresh(service)
     return service
+
+
+def _service_needs_listing_refresh(service: SellerService, now: datetime) -> bool:
+    if service.status in {"deleted", "disabled"}:
+        return False
+    refreshed_at = service.last_refreshed_at
+    if refreshed_at is None:
+        return True
+    if refreshed_at.tzinfo is None:
+        refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+    return (now - refreshed_at).total_seconds() >= AUTO_REFRESH_STALE_AFTER_SECONDS
+
+
+async def refresh_services_for_listing(
+    session: AsyncSession,
+    services: list[SellerService],
+) -> list[SellerService]:
+    now = datetime.now(timezone.utc)
+    refreshed = 0
+    for service in services:
+        if refreshed >= AUTO_REFRESH_MAX_SERVICES:
+            break
+        if not _service_needs_listing_refresh(service, now):
+            continue
+        try:
+            await refresh_service(session, service)
+            refreshed += 1
+        except Exception:
+            await session.rollback()
+            logger.warning(
+                "Failed to auto-refresh seller service usage for %s",
+                service.panel_username,
+                exc_info=True,
+            )
+    return services
 
 
 async def toggle_service(

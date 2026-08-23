@@ -21,6 +21,8 @@ class PanelError(RuntimeError):
 
 MEXICO_PANEL_KEYS = {"mexico_hajmi", "mexico_namahdod"}
 MEXICO_UNLIMITED_DATA_LIMIT_BYTES = 300 * 1024**3
+STRICT_USERNAME_PANEL_TYPES = {"marzban"}
+STRICT_USERNAME_MAX_LENGTH = 32
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,26 @@ def _provider_data_limit(panel: Panel, volume_gb: float) -> int:
     if panel.key == "mexico_namahdod":
         return MEXICO_UNLIMITED_DATA_LIMIT_BYTES
     return int(round(float(volume_gb) * 1024**3)) if volume_gb > 0 else 0
+
+
+def normalize_panel_username(panel: Panel, username: str) -> str:
+    value = str(username or "").strip()
+    if panel.panel_type not in STRICT_USERNAME_PANEL_TYPES:
+        return value
+    value = re.sub(r"[^a-z0-9_]+", "_", value.casefold())
+    value = re.sub(r"_+", "_", value).strip("_")
+    if not value:
+        value = "user"
+    match = re.fullmatch(r"^(.*?)(\d+)$", value)
+    if match:
+        suffix = match.group(2)
+        base_limit = max(1, STRICT_USERNAME_MAX_LENGTH - len(suffix))
+        value = f"{match.group(1)[:base_limit].rstrip('_')}{suffix}"
+    else:
+        value = value[:STRICT_USERNAME_MAX_LENGTH].rstrip("_")
+    if len(value) < 3:
+        value = f"{value}_vpn"[:STRICT_USERNAME_MAX_LENGTH].rstrip("_")
+    return value
 
 
 async def _token(client: httpx.AsyncClient, panel: Panel) -> str:
@@ -190,7 +212,7 @@ async def _access_fields(
                 for item in items
                 if isinstance(item, dict) and item.get("tag")
             ] if isinstance(items, list) else []
-            if tags:
+            if tags or isinstance(items, list):
                 inbounds[str(protocol)] = tags
     elif isinstance(payload, list):
         tags = [str(item).strip() for item in payload if str(item).strip()]

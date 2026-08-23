@@ -178,10 +178,11 @@ function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [recent, setRecent] = useState<Service[]>([]);
   useEffect(() => {
-    Promise.all([api<Dashboard>("/dashboard"), api<Service[]>("/services")]).then(([stats, rows]) => {
-      setData(stats);
+    (async () => {
+      const rows = await api<Service[]>("/services?refresh=1");
       setRecent(rows.slice(0, 5));
-    });
+      setData(await api<Dashboard>("/dashboard"));
+    })();
   }, []);
   return (
     <>
@@ -206,8 +207,9 @@ function Usage({ service }: { service: Service }) {
     : 0;
   return (
     <div className="usage">
-      <div><span>{bytes(service.used_bytes)}</span><small>{service.data_limit_bytes ? `از ${bytes(service.data_limit_bytes)}` : "حجم نامحدود"}</small></div>
+      <div><span>{bytes(service.used_bytes)}</span><small>{service.data_limit_bytes ? `مصرف‌شده از ${bytes(service.data_limit_bytes)}` : "مصرف‌شده از حجم نامحدود"}</small></div>
       <div className="progress"><i style={{ width: `${percent}%` }} /></div>
+      <small className="usage-refresh">بروزرسانی: {service.last_refreshed_at ? date(service.last_refreshed_at) : "انجام نشده"}</small>
     </div>
   );
 }
@@ -297,7 +299,9 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
   const [editForm, setEditForm] = useState({ volume_gb: 0, duration_days: 30, time_mode: "date" });
   const [toast, setToast] = useState<{ message: string; tone: "ok" | "error" } | null>(null);
   const load = useCallback(async () => {
-    const suffix = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+    const params = new URLSearchParams({ refresh: "1" });
+    if (query.trim()) params.set("q", query.trim());
+    const suffix = `?${params.toString()}`;
     setServices(await api<Service[]>(`/services${suffix}`));
   }, [query]);
   useEffect(() => { void api<Offer[]>("/offers").then(setOffers); }, []);

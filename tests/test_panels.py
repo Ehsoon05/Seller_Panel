@@ -9,6 +9,7 @@ from backend.panels import (
     _api_base_url,
     _provider_data_limit,
     _recover_created_user,
+    normalize_panel_username,
 )
 
 
@@ -53,6 +54,18 @@ class PanelRoutingTests(unittest.IsolatedAsyncioTestCase):
         with patch("backend.panels.settings.mexico_panel_api_url", "https://relay.example/"):
             self.assertEqual(_api_base_url(value), "https://relay.example")
         self.assertEqual(value.base_url, "https://provider.example")
+
+    def test_marzban_username_is_normalized_to_provider_limits(self) -> None:
+        value = panel("mmd_germany")
+        object.__setattr__(value, "panel_type", "marzban")
+        self.assertEqual(
+            normalize_panel_username(value, "PhantomExpress10GB-VIP123456789"),
+            "phantomexpress10gb_vip123456789",
+        )
+        self.assertLessEqual(
+            len(normalize_panel_username(value, "PhantomExpress10GB-VIP123456789")),
+            32,
+        )
 
     async def test_timed_out_creation_can_recover_existing_panel_user(self) -> None:
         payload = await _recover_created_user(_Client(), {"Authorization": "Bearer token"}, "created")

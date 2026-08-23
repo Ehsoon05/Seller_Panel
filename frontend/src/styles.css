@@ -226,6 +226,7 @@ tbody tr:hover { background: rgba(255,255,255,.015); }
 .usage { display: grid; gap: 6px; }
 .usage > div:first-child { display: flex; gap: 5px; align-items: baseline; }
 .usage small { color: var(--muted); }
+.usage-refresh { display: block; font-size: 10px; line-height: 1.6; }
 .progress { height: 4px; width: min(140px, 100%); background: #242b35; border-radius: 4px; overflow: hidden; }
 .progress i { display: block; height: 100%; background: var(--primary); }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; max-width: 100%; }
