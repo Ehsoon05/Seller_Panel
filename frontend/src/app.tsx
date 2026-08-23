@@ -179,9 +179,12 @@ function DashboardPage() {
   const [recent, setRecent] = useState<Service[]>([]);
   useEffect(() => {
     (async () => {
-      const rows = await api<Service[]>("/services?refresh=1");
+      const [stats, rows] = await Promise.all([
+        api<Dashboard>("/dashboard"),
+        api<Service[]>("/services"),
+      ]);
+      setData(stats);
       setRecent(rows.slice(0, 5));
-      setData(await api<Dashboard>("/dashboard"));
     })();
   }, []);
   return (
@@ -299,9 +302,9 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
   const [editForm, setEditForm] = useState({ volume_gb: 0, duration_days: 30, time_mode: "date" });
   const [toast, setToast] = useState<{ message: string; tone: "ok" | "error" } | null>(null);
   const load = useCallback(async () => {
-    const params = new URLSearchParams({ refresh: "1" });
+    const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
-    const suffix = `?${params.toString()}`;
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     setServices(await api<Service[]>(`/services${suffix}`));
   }, [query]);
   useEffect(() => { void api<Offer[]>("/offers").then(setOffers); }, []);
