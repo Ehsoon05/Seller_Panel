@@ -19,6 +19,7 @@ from backend.service import (
     remove_service,
     renew_service,
     reset_subscription_devices,
+    revoke_subscription_link,
     update_service,
 )
 
@@ -348,6 +349,67 @@ class SellerServiceTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     "https://api.example/internal/configs/public-token/devices/reset",
+                    {"Authorization": "Bearer secret-token"},
+                )
+            ],
+        )
+
+    async def test_revoke_subscription_link_updates_public_token_and_url(self) -> None:
+        service = SellerService(
+            request_id="revoke-link-000000000000001",
+            seller_id=self.seller_id,
+            offer_id=self.offer_id,
+            panel_key="easy",
+            panel_username="SellerVIP1",
+            upstream_url="https://panel.example/sub/token",
+            public_token="old-token",
+            public_url="https://api.example/token/old-token",
+            volume_gb=20,
+            duration_days=30,
+            time_mode="date",
+            price_toman=100_000,
+        )
+        calls = []
+
+        class Response:
+            status_code = 200
+            is_error = False
+
+            def json(self):
+                return {
+                    "token": "new-token",
+                    "public_url": "https://api.example/token/new-token",
+                }
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, *, json, headers):
+                calls.append((url, json, headers))
+                return Response()
+
+        with (
+            patch("backend.service.settings.subscription_sync_url", "https://api.example/internal/configs"),
+            patch("backend.service.settings.subscription_sync_token", "secret-token"),
+            patch("backend.service.httpx.AsyncClient", Client),
+        ):
+            await revoke_subscription_link(service)
+
+        self.assertEqual(service.public_token, "new-token")
+        self.assertEqual(service.public_url, "https://api.example/token/new-token")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "https://api.example/internal/configs/old-token/revoke",
+                    {},
                     {"Authorization": "Bearer secret-token"},
                 )
             ],

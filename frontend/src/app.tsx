@@ -230,6 +230,7 @@ function ServiceTable({
   onRenew,
   onDelete,
   onResetDevices,
+  onRevoke,
   busyId,
   notify,
 }: {
@@ -241,6 +242,7 @@ function ServiceTable({
   onRenew?: (service: Service) => void;
   onDelete?: (service: Service) => void;
   onResetDevices?: (service: Service) => void;
+  onRevoke?: (service: Service) => void;
   busyId?: number | null;
   notify?: (message: string) => void;
 }) {
@@ -278,6 +280,7 @@ function ServiceTable({
                     <button className={`icon-button has-tooltip ${service.status === "disabled" ? "enable" : "disable"}`} onClick={() => onToggle?.(service)} disabled={busyId === service.id} aria-label={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"} data-tooltip={service.status === "disabled" ? "فعال‌کردن" : "غیرفعال‌کردن"}><Power size={17} /></button>
                     <button className="icon-button has-tooltip renew-icon" onClick={() => onRenew?.(service)} disabled={busyId === service.id} aria-label="تمدید" data-tooltip="تمدید"><RotateCcw size={17} /></button>
                     <button className="icon-button has-tooltip device-icon" onClick={() => onResetDevices?.(service)} disabled={busyId === service.id} aria-label="ریست محدودیت کاربر" data-tooltip="ریست محدودیت کاربر"><Fingerprint size={17} /></button>
+                    <button className="icon-button has-tooltip revoke-icon" onClick={() => onRevoke?.(service)} disabled={busyId === service.id} aria-label="ساخت لینک جدید" data-tooltip="ساخت لینک جدید"><RefreshCw size={17} /></button>
                     <button className="icon-button has-tooltip" onClick={() => onEdit?.(service)} disabled={busyId === service.id} aria-label="ویرایش" data-tooltip="ویرایش"><Pencil size={17} /></button>
                     <button className="icon-button has-tooltip danger-icon" onClick={() => onDelete?.(service)} disabled={busyId === service.id} aria-label="حذف کامل" data-tooltip="حذف کامل"><Trash2 size={17} /></button>
                   </div>
@@ -419,6 +422,20 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
       setBusyId(null);
     }
   }
+  async function revokeLink(service: Service) {
+    if (!window.confirm(`با ساخت لینک جدید برای «${service.panel_username}»، لینک قبلی باطل می‌شود و فقط لینک جدید معتبر خواهد بود. ادامه می‌دهید؟`)) return;
+    setBusyId(service.id);
+    try {
+      const updated = await api<Service>(`/services/${service.id}/revoke`, { method: "POST" });
+      setServices((items) => items.map((item) => item.id === updated.id ? updated : item));
+      await navigator.clipboard.writeText(updated.public_url);
+      setToast({ message: "لینک جدید ساخته شد و در کلیپ‌بورد کپی شد.", tone: "ok" });
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : "ساخت لینک جدید انجام نشد.", tone: "error" });
+    } finally {
+      setBusyId(null);
+    }
+  }
   const editingOffer = editing ? offers.find((item) => item.id === editing.offer_id) : null;
   return (
     <>
@@ -427,7 +444,7 @@ function ServicesPage({ onSellerRefresh }: { onSellerRefresh: () => Promise<void
         <label className="search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجو با نام، یوزرنیم یا لینک..." /></label>
         <span>{services.length.toLocaleString("fa-IR")} سرویس</span>
       </div>
-      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} onEdit={openEdit} onRenew={(value) => void openRenew(value)} onDelete={(value) => void remove(value)} onResetDevices={(value) => void resetDevices(value)} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
+      <ServiceTable services={services} onRefresh={(value) => action(value, "refresh")} onToggle={(value) => action(value, "toggle")} onEdit={openEdit} onRenew={(value) => void openRenew(value)} onDelete={(value) => void remove(value)} onResetDevices={(value) => void resetDevices(value)} onRevoke={(value) => void revokeLink(value)} busyId={busyId} notify={(message) => setToast({ message, tone: "ok" })} />
       {editing && (
         <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setEditing(null)}>
           <form className="edit-modal" onSubmit={saveEdit}>

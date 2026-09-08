@@ -22,6 +22,7 @@ from .service import (
     refresh_service,
     remove_service,
     reset_subscription_devices,
+    revoke_subscription_link,
     renewal_quote,
     renew_service,
     seller_out,
@@ -164,6 +165,25 @@ async def reset_devices(
     service = await _owned_service(service_id, seller, session)
     await reset_subscription_devices(service)
     return {"ok": True}
+
+
+@router.post("/services/{service_id}/revoke")
+async def revoke_link(
+    service_id: int,
+    seller: Seller = Depends(current_seller),
+    session: AsyncSession = Depends(get_session),
+):
+    service = await _owned_service(service_id, seller, session)
+    try:
+        await revoke_subscription_link(service)
+        await session.commit()
+        await session.refresh(service)
+        return service_out(service)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await session.rollback()
+        raise HTTPException(status_code=502, detail=str(exc) or "ساخت لینک جدید انجام نشد.") from exc
 
 
 @router.post("/services/{service_id}/status")

@@ -252,6 +252,39 @@ async def reset_subscription_devices(service: SellerService) -> None:
         )
 
 
+async def revoke_subscription_link(service: SellerService) -> SellerService:
+    if not settings.subscription_sync_url or not settings.subscription_sync_token:
+        raise HTTPException(status_code=409, detail="اتصال داخلی پنل ساب تنظیم نشده است.")
+    url = (
+        f"{settings.subscription_sync_url.rstrip('/')}/"
+        f"{quote(service.public_token, safe='')}/revoke"
+    )
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            url,
+            json={},
+            headers={"Authorization": f"Bearer {settings.subscription_sync_token}"},
+        )
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="لینک پنل ساب این سرویس پیدا نشد.")
+    if response.is_error:
+        raise HTTPException(
+            status_code=502,
+            detail="ساخت لینک جدید در پنل ساب انجام نشد.",
+        )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="پاسخ پنل ساب معتبر نبود.") from exc
+    token = str(payload.get("token") or "").strip()
+    public_url = str(payload.get("public_url") or "").strip()
+    if not token or not public_url:
+        raise HTTPException(status_code=502, detail="پنل ساب لینک جدید معتبر برنگرداند.")
+    service.public_token = token
+    service.public_url = public_url
+    return service
+
+
 async def notify_service_created(
     seller: Seller,
     offer: SellerOffer,

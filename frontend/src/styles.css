@@ -158,6 +158,7 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .icon-button.danger-icon { color: #ff858a; }
 .icon-button.renew-icon { color: #8fa8ff; }
 .icon-button.device-icon { color: #80d7ff; }
+.icon-button.revoke-icon { color: #d6b4ff; }
 .has-tooltip { position: relative; }
 .has-tooltip::after {
   content: attr(data-tooltip);
