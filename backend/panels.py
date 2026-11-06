@@ -21,7 +21,7 @@ class PanelError(RuntimeError):
 
 MEXICO_PANEL_KEYS = {"mexico_hajmi", "mexico_namahdod"}
 MEXICO_UNLIMITED_DATA_LIMIT_BYTES = 300 * 1024**3
-STRICT_USERNAME_PANEL_TYPES = {"marzban"}
+STRICT_USERNAME_PANEL_TYPES = {"marzban", "hyper"}
 STRICT_USERNAME_MAX_LENGTH = 32
 
 
@@ -114,15 +114,16 @@ def normalize_panel_username(panel: Panel, username: str) -> str:
     value = re.sub(r"_+", "_", value).strip("_")
     if not value:
         value = "user"
+    max_length = 30 if panel.panel_type == "hyper" else STRICT_USERNAME_MAX_LENGTH
     match = re.fullmatch(r"^(.*?)(\d+)$", value)
     if match:
         suffix = match.group(2)
-        base_limit = max(1, STRICT_USERNAME_MAX_LENGTH - len(suffix))
+        base_limit = max(1, max_length - len(suffix))
         value = f"{match.group(1)[:base_limit].rstrip('_')}{suffix}"
     else:
-        value = value[:STRICT_USERNAME_MAX_LENGTH].rstrip("_")
+        value = value[:max_length].rstrip("_")
     if len(value) < 3:
-        value = f"{value}_vpn"[:STRICT_USERNAME_MAX_LENGTH].rstrip("_")
+        value = f"{value}_vpn"[:max_length].rstrip("_")
     return value
 
 
@@ -297,6 +298,7 @@ async def create_user(
     time_mode: str,
     hwid_limit: int | None,
 ) -> dict[str, Any]:
+    username = normalize_panel_username(panel, username)
     async with httpx.AsyncClient(
         base_url=_api_base_url(panel),
         verify=False,
