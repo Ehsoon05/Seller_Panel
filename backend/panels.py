@@ -37,6 +37,7 @@ class Panel:
     inbounds: dict[str, list[str]]
     protocols: list[str]
     hwid_limit: int | None
+    api_key: str | None = None
 
 
 def _json(value: str | None, fallback):
@@ -55,7 +56,7 @@ def list_panels() -> list[Panel]:
     connection.row_factory = sqlite3.Row
     try:
         rows = connection.execute(
-            "SELECT key,title,panel_type,base_url,username,password,group_ids,"
+            "SELECT key,title,panel_type,base_url,username,password,api_key,group_ids,"
             "inbounds_json,protocols_json,hwid_limit FROM provision_panels "
             "WHERE is_enabled = 1 ORDER BY title"
         ).fetchall()
@@ -69,6 +70,7 @@ def list_panels() -> list[Panel]:
             base_url=row["base_url"].rstrip("/"),
             username=row["username"],
             password=row["password"],
+            api_key=row["api_key"],
             group_ids=[int(item) for item in _json(row["group_ids"], []) if str(item).isdigit()],
             inbounds=_json(row["inbounds_json"], {}),
             protocols=[str(item) for item in _json(row["protocols_json"], [])],
@@ -125,6 +127,10 @@ def normalize_panel_username(panel: Panel, username: str) -> str:
 
 
 async def _token(client: httpx.AsyncClient, panel: Panel) -> str:
+    if panel.panel_type == "hyper":
+        if not panel.api_key:
+            raise PanelError("کلید API پنل Hyper تنظیم نشده است.")
+        return panel.api_key
     try:
         response = await client.post(
             "/api/admin/token",
@@ -160,13 +166,71 @@ def _timing(mode: str, duration_days: int) -> dict[str, Any]:
 
 
 def _subscription_url(base_url: str, payload: dict[str, Any]) -> str:
-    value = str(payload.get("subscription_url") or "").strip()
+    value = str(payload.get("subscription_url") or payload.get("subscription_link") or "").strip()
     if not value:
         raise PanelError("پنل لینک اشتراک برنگرداند.")
     parsed = urlparse(value)
     if parsed.scheme and parsed.netloc:
         value = urlunparse(("", "", parsed.path, parsed.params, parsed.query, parsed.fragment))
     return urljoin(f"{base_url.rstrip('/')}/", value)
+
+
+def _hyper_headers(panel: Panel) -> dict[str, str]:
+    if not panel.api_key:
+        raise PanelError("کلید API پنل Hyper تنظیم نشده است.")
+    return {"X-API-Key": panel.api_key}
+
+
+def _hyper_timing(mode: str, duration_days: int) -> dict[str, Any]:
+    if mode == "unlimited" or duration_days == 0:
+        return {"limit_expire": 0}
+    if mode == "on_hold":
+        return {"limit_expire": 0, "on_hold_timeout_days": duration_days}
+    return {
+        "limit_expire": int(
+            (datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp()
+        )
+    }
+
+
+def _normalize_hyper(payload: dict[str, Any]) -> dict[str, Any]:
+    enabled = bool(payload.get("enabled", True))
+    usage = int(payload.get("total_usage") or 0)
+    limit = payload.get("limit_usage")
+    expire = int(payload.get("limit_expire") or 0)
+    status = "active"
+    if not enabled:
+        status = "disabled"
+    elif limit is not None and int(limit) > 0 and usage >= int(limit):
+        status = "limited"
+    elif expire > 0 and expire <= int(datetime.now(timezone.utc).timestamp()):
+        status = "expired"
+    elif not payload.get("activated", True):
+        status = "on_hold"
+    return {
+        **payload,
+        "status": status,
+        "data_limit": int(limit or 0),
+        "used_traffic": usage,
+        "expire": expire,
+        "subscription_url": payload.get("subscription_link"),
+    }
+
+
+async def _hyper_fetch(client: httpx.AsyncClient, panel: Panel, username: str) -> dict[str, Any] | None:
+    response = await client.get(
+        "/api/subscriptions",
+        headers=_hyper_headers(panel),
+        params={"usernames": username, "page": 1, "limit": 10},
+    )
+    if response.is_error:
+        raise _error(response, "دریافت وضعیت سرویس Hyper")
+    payload = response.json()
+    items = payload.get("items", []) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return None
+    item = next((x for x in items if isinstance(x, dict) and x.get("username") == username), None)
+    return _normalize_hyper(item) if item else None
 
 
 async def _access_fields(
@@ -238,6 +302,26 @@ async def create_user(
         verify=False,
         timeout=httpx.Timeout(40, connect=15),
     ) as client:
+        if panel.panel_type == "hyper":
+            response = await client.post(
+                "/api/subscriptions",
+                headers=_hyper_headers(panel),
+                json=[{
+                    "username": username,
+                    "limit_usage": _provider_data_limit(panel, volume_gb) or None,
+                    "services": panel.group_ids or [1],
+                    **_hyper_timing(time_mode, duration_days),
+                }],
+            )
+            if response.is_error:
+                raise _error(response, "ساخت سرویس Hyper")
+            raw = response.json()
+            payload = raw[0] if isinstance(raw, list) and raw else raw
+            if not isinstance(payload, dict):
+                raise PanelError("پاسخ ساخت Hyper معتبر نیست.")
+            payload = _normalize_hyper(payload)
+            payload["_subscription_url"] = _subscription_url(panel.base_url, payload)
+            return payload
         token = await _token(client, panel)
         headers = {"Authorization": f"Bearer {token}"}
         access = await _access_fields(client, panel, headers, hwid_limit)
@@ -296,6 +380,8 @@ async def fetch_user(panel: Panel, username: str) -> dict[str, Any]:
         verify=False,
         timeout=httpx.Timeout(30, connect=12),
     ) as client:
+        if panel.panel_type == "hyper":
+            return await _hyper_fetch(client, panel, username) or {"status": "deleted"}
         token = await _token(client, panel)
         response = await client.get(
             f"/api/user/{username}",
@@ -315,6 +401,15 @@ async def set_user_status(panel: Panel, username: str, enabled: bool) -> str:
         verify=False,
         timeout=httpx.Timeout(30, connect=12),
     ) as client:
+        if panel.panel_type == "hyper":
+            response = await client.post(
+                f"/api/subscriptions/{'enable' if enabled else 'disable'}",
+                headers=_hyper_headers(panel),
+                json={"usernames": [username]},
+            )
+            if response.is_error:
+                raise _error(response, "تغییر وضعیت سرویس Hyper")
+            return status_value
         token = await _token(client, panel)
         response = await client.put(
             f"/api/user/{username}",
@@ -340,6 +435,18 @@ async def update_user(
         verify=False,
         timeout=httpx.Timeout(40, connect=15),
     ) as client:
+        if panel.panel_type == "hyper":
+            body = {
+                "usernames": [username],
+                "limit_usage": _provider_data_limit(panel, volume_gb) or None,
+                **(_hyper_timing(time_mode, duration_days) if update_timing else {}),
+            }
+            response = await client.put(
+                "/api/subscriptions", headers=_hyper_headers(panel), json=body
+            )
+            if response.is_error:
+                raise _error(response, "ویرایش سرویس Hyper")
+            return await _hyper_fetch(client, panel, username) or {}
         token = await _token(client, panel)
         response = await client.put(
             f"/api/user/{username}",
@@ -367,6 +474,15 @@ async def reset_user_traffic(panel: Panel, username: str) -> dict[str, Any]:
         verify=False,
         timeout=httpx.Timeout(40, connect=15),
     ) as client:
+        if panel.panel_type == "hyper":
+            response = await client.post(
+                "/api/subscriptions/reset",
+                headers=_hyper_headers(panel),
+                json={"usernames": [username]},
+            )
+            if response.is_error:
+                raise _error(response, "ریست حجم مصرفی سرویس Hyper")
+            return await _hyper_fetch(client, panel, username) or {}
         token = await _token(client, panel)
         headers = {"Authorization": f"Bearer {token}"}
         response = await client.post(f"/api/user/{username}/reset", headers=headers)
@@ -391,6 +507,16 @@ async def delete_user(panel: Panel, username: str) -> None:
         verify=False,
         timeout=httpx.Timeout(30, connect=12),
     ) as client:
+        if panel.panel_type == "hyper":
+            response = await client.request(
+                "DELETE",
+                "/api/subscriptions",
+                headers=_hyper_headers(panel),
+                json={"usernames": [username]},
+            )
+            if response.status_code not in {200, 204, 404}:
+                raise _error(response, "حذف سرویس ناقص Hyper")
+            return
         token = await _token(client, panel)
         response = await client.delete(
             f"/api/user/{username}",
